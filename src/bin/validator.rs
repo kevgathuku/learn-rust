@@ -54,6 +54,10 @@ impl Ledger {
         self.transactions.push(transaction);
     }
 
+    fn next_transaction_id(&self) -> TransactionId {
+        TransactionId(self.transactions.len() as u64 + 1)
+    }
+
     fn balance_for(&self, account: AccountId) -> i64 {
         self.transactions
             .iter()
@@ -91,11 +95,34 @@ impl Ledger {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
 
         self.record(Transaction {
-            id: TransactionId(2),
+            id: self.next_transaction_id(),
             kind: TransactionKind::Transfer {
                 from: sender,
                 to: receiver,
             },
+            amount,
+        });
+        Ok(())
+    }
+
+    fn validate_withdrawal(&self, account: AccountId, amount: u64) -> Result<(), String> {
+        if amount == 0 {
+            return Err(String::from("Invalid amount: Must be greater than 0"));
+        }
+
+        if amount as i64 > self.balance_for(account) {
+            return Err(String::from("Insufficient funds"));
+        }
+
+        Ok(())
+    }
+
+    fn withdraw(&mut self, account: AccountId, amount: u64) -> Result<(), String> {
+        self.validate_withdrawal(account, amount)?;
+
+        self.record(Transaction {
+            id: self.next_transaction_id(),
+            kind: TransactionKind::Withdrawal { account },
             amount,
         });
         Ok(())
@@ -144,7 +171,7 @@ mod tests {
         let n: u64 = rnd::random::<u64>();
 
         ledger.record(Transaction {
-            id: TransactionId(n),
+            id: ledger.next_transaction_id(),
             kind: TransactionKind::Deposit {
                 account: AccountId(n),
             },
@@ -275,5 +302,41 @@ mod tests {
         assert!(ledger.transfer(sender.id, receiver.id, 300).is_ok());
         assert_eq!(ledger.balance_for(sender.id), 500);
         assert_eq!(ledger.balance_for(receiver.id), 1000);
+    }
+
+    #[test]
+    fn withdraw_reduces_balance() {
+        let mut ledger = Ledger::default();
+        let alice = account(&mut ledger, "Alice", 1000);
+
+        assert!(ledger.withdraw(alice.id, 400).is_ok());
+        assert_eq!(ledger.balance_for(alice.id), 600);
+    }
+
+    #[test]
+    fn withdraw_fails_for_zero_amount() {
+        let mut ledger = Ledger::default();
+        let alice = account(&mut ledger, "Alice", 1000);
+
+        assert!(ledger.withdraw(alice.id, 0).is_err());
+        assert_eq!(ledger.balance_for(alice.id), 1000);
+    }
+
+    #[test]
+    fn withdraw_fails_for_insufficient_funds() {
+        let mut ledger = Ledger::default();
+        let alice = account(&mut ledger, "Alice", 1000);
+
+        assert!(ledger.withdraw(alice.id, 9000).is_err());
+        assert_eq!(ledger.balance_for(alice.id), 1000);
+    }
+
+    #[test]
+    fn withdraw_exact_balance() {
+        let mut ledger = Ledger::default();
+        let alice = account(&mut ledger, "Alice", 1000);
+
+        assert!(ledger.withdraw(alice.id, 1000).is_ok());
+        assert_eq!(ledger.balance_for(alice.id), 0);
     }
 }
