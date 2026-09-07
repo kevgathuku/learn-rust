@@ -164,6 +164,18 @@ mod tests {
         }
     }
 
+    impl Ledger {
+        fn with_accounts(
+            first: (&str, u64),
+            second: (&str, u64),
+        ) -> (Self, Account, Account) {
+            let mut ledger = Self::default();
+            let first_account = account(&mut ledger, first.0, first.1);
+            let second_account = account(&mut ledger, second.0, second.1);
+            (ledger, first_account, second_account)
+        }
+    }
+
     #[test]
     fn rejects_same_sender_and_receiver() {
         let mut ledger = Ledger::default();
@@ -174,9 +186,8 @@ mod tests {
 
     #[test]
     fn rejects_zero_amount() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 1000);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 1000));
 
         assert!(ledger.validate_transfer(sender.id, sender.id, 0).is_err());
         assert!(ledger.transfer(sender.id, receiver.id, 0).is_err());
@@ -184,9 +195,8 @@ mod tests {
 
     #[test]
     fn rejects_higher_amount_than_balance() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 1000);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 1000));
 
         assert!(
             ledger
@@ -197,9 +207,8 @@ mod tests {
 
     #[test]
     fn accepts_different_users_and_valid_amount() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 1000);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 1000));
 
         assert!(ledger.validate_transfer(sender.id, receiver.id, 10).is_ok());
         assert!(ledger.transfer(sender.id, receiver.id, 10).is_ok());
@@ -207,9 +216,8 @@ mod tests {
 
     #[test]
     fn transfer_moves_funds() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 1000);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 1000));
 
         assert!(ledger.transfer(sender.id, receiver.id, 300).is_ok());
         assert_eq!(ledger.balance_for(sender.id), 700);
@@ -218,11 +226,8 @@ mod tests {
 
     #[test]
     fn transfer_returns_correct_balances() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 1000);
-        let sender_id = sender.id;
-        let receiver_id = receiver.id;
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 1000));
 
         assert!(ledger.transfer(sender.id, receiver.id, 300).is_ok());
         assert_eq!(ledger.balance_for(sender.id), 700);
@@ -231,9 +236,8 @@ mod tests {
 
     #[test]
     fn failed_transfer_leaves_balances_unchanged() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 1000);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 1000));
 
         assert!(ledger.transfer(sender.id, receiver.id, 0).is_err());
         assert_eq!(ledger.balance_for(sender.id), 1000);
@@ -242,9 +246,8 @@ mod tests {
 
     #[test]
     fn transfer_allows_same_name_with_different_ids() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Alice", 500);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Alice", 500));
 
         assert!(ledger.transfer(sender.id, receiver.id, 100).is_ok());
         assert_eq!(ledger.balance_for(sender.id), 900);
@@ -253,9 +256,8 @@ mod tests {
 
     #[test]
     fn transfer_fails_for_insufficient_funds() {
-        let mut ledger = Ledger::default();
-        let sender = account(&mut ledger, "Alice", 1000);
-        let receiver = account(&mut ledger, "Brian", 1000);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 1000));
 
         assert!(ledger.transfer(sender.id, receiver.id, 9_000).is_err());
         assert_eq!(ledger.balance_for(sender.id), 1000);
@@ -264,9 +266,8 @@ mod tests {
 
     #[test]
     fn transfer_exact_balance() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 500);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 500));
 
         assert!(ledger.transfer(sender.id, receiver.id, 1_000).is_ok());
         assert_eq!(ledger.balance_for(sender.id), 0);
@@ -275,9 +276,8 @@ mod tests {
 
     #[test]
     fn multiple_transfers() {
-        let mut ledger = Ledger::default();
-        let mut sender = account(&mut ledger, "Alice", 1000);
-        let mut receiver = account(&mut ledger, "Brian", 500);
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 1000), ("Brian", 500));
 
         assert!(ledger.transfer(sender.id, receiver.id, 200).is_ok());
         assert!(ledger.transfer(sender.id, receiver.id, 300).is_ok());
