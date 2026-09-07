@@ -1,20 +1,24 @@
 #![allow(unused)]
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AccountId(u64);
+
 #[derive(Debug, Clone)]
 struct Account {
+    id: AccountId,
     name: String,
     balance: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Transaction {
-    sender: Account,
-    receiver: Account,
+    sender: AccountId,
+    receiver: AccountId,
     amount: u64,
 }
 
 fn validate(sender: &Account, receiver: &Account, amount: u64) -> Result<(), String> {
-    if sender.name == receiver.name {
+    if sender.id == receiver.id {
         return Err(String::from("Sender and receiver cannot be the same"));
     }
 
@@ -38,8 +42,8 @@ fn make_transfer(
     sender.balance -= amount;
     receiver.balance += amount;
     Ok(Transaction {
-        sender: sender.clone(),
-        receiver: receiver.clone(),
+        sender: sender.id,
+        receiver: receiver.id,
         amount,
     })
 }
@@ -53,7 +57,9 @@ mod tests {
     use super::*;
 
     fn account(name: &str, balance: u64) -> Account {
+        let n: u64 = rnd::random::<u64>();
         Account {
+            id: AccountId(n),
             name: name.into(),
             balance,
         }
@@ -105,12 +111,14 @@ mod tests {
     fn transfer_returns_correct_transaction() {
         let mut sender = account("Alice", 1000);
         let mut receiver = account("Brian", 1000);
+        let sender_id = sender.id;
+        let receiver_id = receiver.id;
 
         let tx = make_transfer(&mut sender, &mut receiver, 300).unwrap();
 
-        assert_eq!(tx.sender.balance, 700);
-        assert_eq!(tx.receiver.balance, 1300);
         assert_eq!(tx.amount, 300);
+        assert_eq!(sender.balance, 700);
+        assert_eq!(receiver.balance, 1300);
     }
 
     #[test]
@@ -124,13 +132,14 @@ mod tests {
     }
 
     #[test]
-    fn transfer_fails_for_same_name() {
+    fn transfer_allows_same_name_with_different_ids() {
         let mut alice = account("Alice", 1000);
         let mut dup_alice = account("Alice", 500);
 
-        assert!(make_transfer(&mut alice, &mut dup_alice, 100).is_err());
-        assert_eq!(alice.balance, 1000);
-        assert_eq!(dup_alice.balance, 500);
+        make_transfer(&mut alice, &mut dup_alice, 100).unwrap();
+
+        assert_eq!(alice.balance, 900);
+        assert_eq!(dup_alice.balance, 600);
     }
 
     #[test]
