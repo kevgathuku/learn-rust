@@ -50,12 +50,12 @@ struct Ledger {
 }
 
 impl Ledger {
-    fn record(&mut self, transaction: Transaction) {
-        self.transactions.push(transaction);
-    }
-
-    fn next_transaction_id(&self) -> TransactionId {
-        TransactionId(self.transactions.len() as u64 + 1)
+    fn record(&mut self, kind: TransactionKind, amount: u64) {
+        self.transactions.push(Transaction {
+            id: TransactionId(self.transactions.len() as u64 + 1),
+            kind,
+            amount,
+        });
     }
 
     fn balance_for(&self, account: AccountId) -> i64 {
@@ -70,11 +70,7 @@ impl Ledger {
             return Err(String::from("Invalid amount: Must be greater than 0"));
         }
 
-        self.record(Transaction {
-            id: self.next_transaction_id(),
-            kind: TransactionKind::Deposit { account },
-            amount,
-        });
+        self.record(TransactionKind::Deposit { account }, amount);
         Ok(())
     }
 
@@ -107,14 +103,13 @@ impl Ledger {
     ) -> Result<(), String> {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
 
-        self.record(Transaction {
-            id: self.next_transaction_id(),
-            kind: TransactionKind::Transfer {
+        self.record(
+            TransactionKind::Transfer {
                 from: sender,
                 to: receiver,
             },
             amount,
-        });
+        );
         Ok(())
     }
 
@@ -127,11 +122,7 @@ impl Ledger {
             return Err(String::from("Insufficient funds"));
         }
 
-        self.record(Transaction {
-            id: self.next_transaction_id(),
-            kind: TransactionKind::Withdrawal { account },
-            amount,
-        });
+        self.record(TransactionKind::Withdrawal { account }, amount);
         Ok(())
     }
 }
