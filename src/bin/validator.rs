@@ -65,6 +65,19 @@ impl Ledger {
             .sum()
     }
 
+    fn deposit(&mut self, account: AccountId, amount: u64) -> Result<(), String> {
+        if amount == 0 {
+            return Err(String::from("Invalid amount: Must be greater than 0"));
+        }
+
+        self.record(Transaction {
+            id: self.next_transaction_id(),
+            kind: TransactionKind::Deposit { account },
+            amount,
+        });
+        Ok(())
+    }
+
     fn validate_transfer(
         &self,
         sender: AccountId,
@@ -105,7 +118,7 @@ impl Ledger {
         Ok(())
     }
 
-    fn validate_withdrawal(&self, account: AccountId, amount: u64) -> Result<(), String> {
+    fn withdraw(&mut self, account: AccountId, amount: u64) -> Result<(), String> {
         if amount == 0 {
             return Err(String::from("Invalid amount: Must be greater than 0"));
         }
@@ -113,12 +126,6 @@ impl Ledger {
         if amount as i64 > self.balance_for(account) {
             return Err(String::from("Insufficient funds"));
         }
-
-        Ok(())
-    }
-
-    fn withdraw(&mut self, account: AccountId, amount: u64) -> Result<(), String> {
-        self.validate_withdrawal(account, amount)?;
 
         self.record(Transaction {
             id: self.next_transaction_id(),
@@ -141,23 +148,12 @@ fn main() {
 
     let mut ledger = Ledger::default();
 
-    ledger.record(Transaction {
-        id: TransactionId(1),
-        kind: TransactionKind::Deposit { account: alice.id },
-        amount: 1_000,
-    });
+    ledger.deposit(alice.id, 1_000).unwrap();
 
     println!("Alice Before: {}", ledger.balance_for(alice.id));
     println!("Brian Before: {}", ledger.balance_for(brian.id));
 
-    ledger.record(Transaction {
-        id: TransactionId(1),
-        kind: TransactionKind::Transfer {
-            from: alice.id,
-            to: brian.id,
-        },
-        amount: 100,
-    });
+    ledger.transfer(alice.id, brian.id, 100).unwrap();
 
     println!("Alice: {}", ledger.balance_for(alice.id));
     println!("Brian: {}", ledger.balance_for(brian.id));
@@ -170,13 +166,7 @@ mod tests {
     fn account(ledger: &mut Ledger, name: &str, balance: u64) -> Account {
         let n: u64 = rnd::random::<u64>();
 
-        ledger.record(Transaction {
-            id: ledger.next_transaction_id(),
-            kind: TransactionKind::Deposit {
-                account: AccountId(n),
-            },
-            amount: balance,
-        });
+        ledger.deposit(AccountId(n), balance).unwrap();
         Account {
             id: AccountId(n),
             name: name.into(),
