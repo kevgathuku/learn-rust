@@ -154,12 +154,16 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn account(ledger: &mut Ledger, name: &str, balance: u64) -> Account {
-        let n: u64 = rnd::random::<u64>();
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-        ledger.deposit(AccountId(n), balance).unwrap();
+    static NEXT_ACCOUNT_ID: AtomicU64 = AtomicU64::new(1);
+
+    fn account(ledger: &mut Ledger, name: &str, balance: u64) -> Account {
+        let id = AccountId(NEXT_ACCOUNT_ID.fetch_add(1, Ordering::Relaxed));
+
+        ledger.deposit(id, balance).unwrap();
         Account {
-            id: AccountId(n),
+            id,
             name: name.into(),
         }
     }
