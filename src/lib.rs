@@ -14,6 +14,18 @@ pub enum Currency {
     Eur,
     Usd,
     Kes,
+    Gbp,
+    Jpy,
+    Chf,
+    Cad,
+    Aud,
+    Cny,
+    Inr,
+    Brl,
+    Tzs,
+    Ugx,
+    Rwf,
+    Zar,
 }
 
 impl std::fmt::Display for Currency {
@@ -22,6 +34,18 @@ impl std::fmt::Display for Currency {
             Currency::Eur => write!(f, "EUR"),
             Currency::Usd => write!(f, "USD"),
             Currency::Kes => write!(f, "KES"),
+            Currency::Gbp => write!(f, "GBP"),
+            Currency::Jpy => write!(f, "JPY"),
+            Currency::Chf => write!(f, "CHF"),
+            Currency::Cad => write!(f, "CAD"),
+            Currency::Aud => write!(f, "AUD"),
+            Currency::Cny => write!(f, "CNY"),
+            Currency::Inr => write!(f, "INR"),
+            Currency::Brl => write!(f, "BRL"),
+            Currency::Tzs => write!(f, "TZS"),
+            Currency::Ugx => write!(f, "UGX"),
+            Currency::Rwf => write!(f, "RWF"),
+            Currency::Zar => write!(f, "ZAR"),
         }
     }
 }
@@ -256,6 +280,18 @@ impl std::str::FromStr for Currency {
             "EUR" => Ok(Currency::Eur),
             "USD" => Ok(Currency::Usd),
             "KES" => Ok(Currency::Kes),
+            "GBP" => Ok(Currency::Gbp),
+            "JPY" => Ok(Currency::Jpy),
+            "CHF" => Ok(Currency::Chf),
+            "CAD" => Ok(Currency::Cad),
+            "AUD" => Ok(Currency::Aud),
+            "CNY" => Ok(Currency::Cny),
+            "INR" => Ok(Currency::Inr),
+            "BRL" => Ok(Currency::Brl),
+            "TZS" => Ok(Currency::Tzs),
+            "UGX" => Ok(Currency::Ugx),
+            "RWF" => Ok(Currency::Rwf),
+            "ZAR" => Ok(Currency::Zar),
             _ => Err(RateError::StoreUnavailable(format!(
                 "unknown currency: {s}"
             ))),
