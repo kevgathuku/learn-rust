@@ -216,7 +216,11 @@ impl Transaction {
 
 impl std::fmt::Display for Transaction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{} {} via {:?}", self.id.0, self.kind, self.channel)
+        write!(
+            f,
+            "#{} {} via {:?} @ {:?}",
+            self.id.0, self.kind, self.channel, self.timestamp
+        )
     }
 }
 
@@ -315,6 +319,7 @@ impl Ledger {
     }
 
     pub fn format_transaction(&self, tx: &Transaction) -> String {
+        let ts = format!("{:?}", tx.timestamp);
         let sender = tx
             .sender()
             .and_then(|id| self.accounts.get(&id))
@@ -332,8 +337,8 @@ impl Ledger {
                     currency: self.currency,
                 });
                 format!(
-                    "#{} Deposit {} {} via {:?}",
-                    tx.id.0, receiver, money, tx.channel
+                    "#{} Deposit {} {} via {:?} @ {}",
+                    tx.id.0, receiver, money, tx.channel, ts
                 )
             }
             TransactionKind::Withdrawal { account } => {
@@ -346,8 +351,8 @@ impl Ledger {
                     currency: money.currency,
                 };
                 format!(
-                    "#{} Withdrawal {} {} via {:?}",
-                    tx.id.0, sender, abs_money, tx.channel
+                    "#{} Withdrawal {} {} via {:?} @ {}",
+                    tx.id.0, sender, abs_money, tx.channel, ts
                 )
             }
             TransactionKind::Transfer { from: _, to } => {
@@ -356,8 +361,8 @@ impl Ledger {
                     currency: self.currency,
                 });
                 format!(
-                    "#{} {} -> {} {} via {:?}",
-                    tx.id.0, sender, receiver, money, tx.channel
+                    "#{} {} -> {} {} via {:?} @ {}",
+                    tx.id.0, sender, receiver, money, tx.channel, ts
                 )
             }
             TransactionKind::Reversal {
@@ -374,8 +379,8 @@ impl Ledger {
                     currency: money.currency,
                 };
                 format!(
-                    "#{} Reversal of #{} {} via {:?}",
-                    tx.id.0, original_transaction_id.0, abs_money, tx.channel
+                    "#{} Reversal of #{} {} via {:?} @ {}",
+                    tx.id.0, original_transaction_id.0, abs_money, tx.channel, ts
                 )
             }
         }
