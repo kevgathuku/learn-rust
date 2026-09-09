@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -166,69 +165,35 @@ struct FrankfurterRate {
 }
 
 pub fn fetch_frankfurter() -> Result<Vec<ExchangeRate>, RateError> {
-    let body: String = ureq::get("https://api.frankfurter.dev/v2/rates?base=USD")
-        .call()
-        .map_err(|e| RateError::StoreUnavailable(format!("Frankfurter request failed: {e}")))?
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| RateError::StoreUnavailable(format!("Failed to read response: {e}")))?;
-
-    let resp: Vec<FrankfurterRate> = serde_json::from_str(&body)
-        .map_err(|e| RateError::StoreUnavailable(format!("Failed to parse response: {e}")))?;
-
+    let bases = [Currency::Usd, Currency::Eur, Currency::Kes];
     let now = SystemTime::now();
-
-    // Collect USD→X rates for currencies we support
-    let mut usd_rates: HashMap<Currency, f64> = HashMap::new();
-    for entry in &resp {
-        if let (Ok(from), Ok(to)) = (
-            entry.base.parse::<Currency>(),
-            entry.quote.parse::<Currency>(),
-        ) && from == Currency::Usd
-        {
-            usd_rates.insert(to, entry.rate);
-        }
-    }
-
     let mut rates = Vec::new();
 
-    // USD → EUR, USD → KES
-    for (currency, rate) in &usd_rates {
-        rates.push(ExchangeRate {
-            from: Currency::Usd,
-            to: *currency,
-            rate: *rate,
-            fetched_at: now,
-        });
-        // Inverse: EUR/USD → USD, KES/USD → USD
-        if *rate != 0.0 {
-            rates.push(ExchangeRate {
-                from: *currency,
-                to: Currency::Usd,
-                rate: 1.0 / rate,
-                fetched_at: now,
-            });
-        }
-    }
+    for base in &bases {
+        let url = format!("https://api.frankfurter.dev/v2/rates?base={base}");
+        let body: String = ureq::get(&url)
+            .call()
+            .map_err(|e| RateError::StoreUnavailable(format!("Frankfurter request failed: {e}")))?
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| RateError::StoreUnavailable(format!("Failed to read response: {e}")))?;
 
-    // Cross-rates: EUR → KES and KES → EUR via USD
-    if let (Some(&eur_usd), Some(&kes_usd)) =
-        (usd_rates.get(&Currency::Eur), usd_rates.get(&Currency::Kes))
-    {
-        // EUR → KES: (1 USD / EUR rate) * KES rate = kes_usd / eur_usd
-        let eur_to_kes = kes_usd / eur_usd;
-        rates.push(ExchangeRate {
-            from: Currency::Eur,
-            to: Currency::Kes,
-            rate: eur_to_kes,
-            fetched_at: now,
-        });
-        rates.push(ExchangeRate {
-            from: Currency::Kes,
-            to: Currency::Eur,
-            rate: 1.0 / eur_to_kes,
-            fetched_at: now,
-        });
+        let resp: Vec<FrankfurterRate> = serde_json::from_str(&body)
+            .map_err(|e| RateError::StoreUnavailable(format!("Failed to parse response: {e}")))?;
+
+        for entry in &resp {
+            if let (Ok(from), Ok(to)) = (
+                entry.base.parse::<Currency>(),
+                entry.quote.parse::<Currency>(),
+            ) {
+                rates.push(ExchangeRate {
+                    from,
+                    to,
+                    rate: entry.rate,
+                    fetched_at: now,
+                });
+            }
+        }
     }
 
     Ok(rates)
