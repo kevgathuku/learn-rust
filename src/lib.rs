@@ -253,6 +253,66 @@ impl std::fmt::Display for LedgerError {
 
 impl std::error::Error for LedgerError {}
 
+fn format_system_time(time: std::time::SystemTime) -> String {
+    let Ok(duration) = time.duration_since(std::time::SystemTime::UNIX_EPOCH) else {
+        return "unknown".into();
+    };
+    let secs = duration.as_secs();
+
+    let seconds = secs % 60;
+    let minutes = (secs / 60) % 60;
+    let hours = (secs / 3600) % 24;
+    let mut days = secs / 86400;
+
+    let mut year = 1970u64;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let leap = is_leap(year);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 0u64;
+    for (i, &md) in month_days.iter().enumerate() {
+        if days < md {
+            month = i as u64 + 1;
+            break;
+        }
+        days -= md;
+    }
+
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year,
+        month,
+        days + 1,
+        hours,
+        minutes,
+        seconds
+    )
+}
+
+fn is_leap(year: u64) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
 #[derive(Debug)]
 pub struct Ledger {
     currency: Currency,
@@ -309,7 +369,7 @@ impl Ledger {
     }
 
     pub fn format_transaction(&self, tx: &Transaction) -> String {
-        let ts = format!("{:?}", tx.timestamp);
+        let ts = format_system_time(tx.timestamp);
         let sender = tx
             .sender()
             .and_then(|id| self.accounts.get(&id))
