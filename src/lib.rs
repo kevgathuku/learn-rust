@@ -151,6 +151,8 @@ pub enum TransactionKind {
     },
     Reversal {
         original_transaction_id: TransactionId,
+        from: AccountId,
+        to: AccountId,
         reason: String,
     },
 }
@@ -163,8 +165,14 @@ impl std::fmt::Display for TransactionKind {
             TransactionKind::Transfer { from, to } => write!(f, "Transfer {:?} -> {:?}", from, to),
             TransactionKind::Reversal {
                 original_transaction_id,
-                reason,
-            } => write!(f, "Reversal of #{} ({})", original_transaction_id.0, reason),
+                from,
+                to,
+                ..
+            } => write!(
+                f,
+                "Reversal of #{} {:?} -> {:?}",
+                original_transaction_id.0, from, to
+            ),
         }
     }
 }
@@ -183,7 +191,7 @@ impl Transaction {
             TransactionKind::Deposit { .. } => None,
             TransactionKind::Withdrawal { account } => Some(*account),
             TransactionKind::Transfer { from, .. } => Some(*from),
-            TransactionKind::Reversal { .. } => None,
+            TransactionKind::Reversal { from, .. } => Some(*from),
         }
     }
 
@@ -192,7 +200,7 @@ impl Transaction {
             TransactionKind::Deposit { account } => Some(*account),
             TransactionKind::Withdrawal { .. } => None,
             TransactionKind::Transfer { to, .. } => Some(*to),
-            TransactionKind::Reversal { .. } => None,
+            TransactionKind::Reversal { to, .. } => Some(*to),
         }
     }
 
@@ -348,9 +356,10 @@ impl Ledger {
             }
             TransactionKind::Reversal {
                 original_transaction_id,
+                from,
                 ..
             } => {
-                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money {
+                let money = tx.entry_for(*from).map(|e| e.amount).unwrap_or(Money {
                     amount_cents: 0,
                     currency: self.currency,
                 });
@@ -540,9 +549,10 @@ impl Ledger {
             .ok_or(LedgerError::TransactionNotFound(original_id))?;
 
         // 2. Only transfers can be reversed
-        if !matches!(original.kind, TransactionKind::Transfer { .. }) {
-            return Err(LedgerError::NonReversibleTransaction(original_id));
-        }
+        let (from, to) = match original.kind {
+            TransactionKind::Transfer { from, to } => (from, to),
+            _ => return Err(LedgerError::NonReversibleTransaction(original_id)),
+        };
 
         // 3. Check if already reversed
         let already_reversed = self.transactions.iter().any(|t| {
@@ -576,6 +586,8 @@ impl Ledger {
             id: TransactionId(self.transactions.len() as u64 + 1),
             kind: TransactionKind::Reversal {
                 original_transaction_id: original_id,
+                from,
+                to,
                 reason: reason.to_string(),
             },
             channel,
