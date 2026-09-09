@@ -214,16 +214,6 @@ impl Transaction {
     }
 }
 
-impl std::fmt::Display for Transaction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "#{} {} via {:?} @ {:?}",
-            self.id.0, self.kind, self.channel, self.timestamp
-        )
-    }
-}
-
 #[derive(Debug)]
 struct LedgerEntry {
     account: AccountId,
