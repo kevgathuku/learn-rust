@@ -186,14 +186,14 @@ pub enum LedgerError {
 #[derive(Debug)]
 pub struct Ledger {
     currency: Currency,
-    fee_account: AccountId,
+    fee_account: Account,
     accounts: HashMap<AccountId, Account>,
     transactions: Vec<Transaction>,
     fee_schedule: FeeSchedule,
 }
 
 impl Ledger {
-    pub fn new(currency: Currency, fee_account: AccountId) -> Self {
+    pub fn new(currency: Currency, fee_account: Account) -> Self {
         Self {
             currency,
             fee_account,
@@ -348,7 +348,7 @@ impl Ledger {
         // Record fees if applicable
         if fee.amount_cents > 0 {
             entries.push(LedgerEntry {
-                account: self.fee_account,
+                account: self.fee_account.id,
                 amount: fee,
             });
         }
@@ -397,7 +397,7 @@ impl Ledger {
         // Record fees if applicable
         if fee.amount_cents > 0 {
             entries.push(LedgerEntry {
-                account: self.fee_account,
+                account: self.fee_account.id,
                 amount: fee,
             });
         }
@@ -424,8 +424,15 @@ mod tests {
 
     static NEXT_ACCOUNT_ID: AtomicU64 = AtomicU64::new(1);
 
-    const BANK_FEE_ACCOUNT: AccountId = AccountId(999);
     const CURRENCY: Currency = Currency::Kes;
+
+    fn bank_fee_account() -> Account {
+        Account {
+            id: AccountId(999),
+            name: "Bank KES Fee Account".into(),
+            currency: CURRENCY,
+        }
+    }
 
     fn money(amount_cents: i64) -> Money {
         Money {
@@ -478,7 +485,7 @@ mod tests {
 
     impl Ledger {
         fn with_accounts(first: (&str, i64), second: (&str, i64)) -> (Self, Account, Account) {
-            let mut ledger = Self::new(CURRENCY, BANK_FEE_ACCOUNT);
+            let mut ledger = Self::new(CURRENCY, bank_fee_account());
             let first_account = account(&mut ledger, first.0, first.1);
             let second_account = account(&mut ledger, second.0, second.1);
             (ledger, first_account, second_account)
@@ -487,7 +494,7 @@ mod tests {
 
     #[test]
     fn rejects_same_sender_and_receiver() {
-        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
         let sender = account(&mut ledger, "Alice", 1_000);
 
         assert!(
@@ -638,7 +645,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .all(|entry| entry.account != BANK_FEE_ACCOUNT)
+                .all(|entry| entry.account != bank_fee_account().id)
         );
     }
 
@@ -665,7 +672,7 @@ mod tests {
         assert_eq!(
             entries
                 .iter()
-                .find(|entry| entry.account == BANK_FEE_ACCOUNT)
+                .find(|entry| entry.account == bank_fee_account().id)
                 .map(|entry| entry.amount.amount_cents),
             Some(200)
         );
@@ -673,7 +680,7 @@ mod tests {
 
     #[test]
     fn withdraw_reduces_balance() {
-        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 40_000).unwrap();
@@ -687,7 +694,7 @@ mod tests {
 
     #[test]
     fn withdraw_fails_for_zero_amount() {
-        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 0).is_err());
@@ -696,7 +703,7 @@ mod tests {
 
     #[test]
     fn withdraw_fails_for_insufficient_funds() {
-        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 900_000).is_err());
@@ -705,7 +712,7 @@ mod tests {
 
     #[test]
     fn withdraw_exact_balance() {
-        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 100_000).unwrap();

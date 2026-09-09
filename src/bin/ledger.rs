@@ -11,8 +11,12 @@ fn main() {
         name: String::from("Brian"),
         currency: Currency::Kes,
     };
+    let bank_fee_account = Account {
+        id: AccountId(999),
+        name: String::from("Bank KES Fee Account"),
+        currency: Currency::Kes,
+    };
 
-    let bank_fee_account = AccountId(999);
     let mut ledger = Ledger::new(Currency::Kes, bank_fee_account);
     ledger.add_account(alice.clone()).unwrap();
     ledger.add_account(brian.clone()).unwrap();
