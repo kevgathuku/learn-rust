@@ -195,6 +195,10 @@ impl Transaction {
             TransactionKind::Reversal { .. } => None,
         }
     }
+
+    fn entry_for(&self, account: AccountId) -> Option<&LedgerEntry> {
+        self.entries.iter().find(|e| e.account == account)
+    }
 }
 
 impl std::fmt::Display for Transaction {
@@ -308,8 +312,8 @@ impl Ledger {
             .map(|a| a.name.as_str())
             .unwrap_or("external");
         match &tx.kind {
-            TransactionKind::Deposit { .. } => {
-                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money {
+            TransactionKind::Deposit { account } => {
+                let money = tx.entry_for(*account).map(|e| e.amount).unwrap_or(Money {
                     amount_cents: 0,
                     currency: self.currency,
                 });
@@ -318,8 +322,8 @@ impl Ledger {
                     tx.id.0, receiver, money, tx.channel
                 )
             }
-            TransactionKind::Withdrawal { .. } => {
-                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money {
+            TransactionKind::Withdrawal { account } => {
+                let money = tx.entry_for(*account).map(|e| e.amount).unwrap_or(Money {
                     amount_cents: 0,
                     currency: self.currency,
                 });
@@ -332,8 +336,8 @@ impl Ledger {
                     tx.id.0, sender, abs_money, tx.channel
                 )
             }
-            TransactionKind::Transfer { .. } => {
-                let money = tx.entries.get(1).map(|e| e.amount).unwrap_or(Money {
+            TransactionKind::Transfer { from: _, to } => {
+                let money = tx.entry_for(*to).map(|e| e.amount).unwrap_or(Money {
                     amount_cents: 0,
                     currency: self.currency,
                 });
