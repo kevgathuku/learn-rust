@@ -133,24 +133,30 @@ struct LedgerEntry {
     amount: Money,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Ledger {
+    currency: Currency,
     accounts: HashMap<AccountId, Account>,
     transactions: Vec<Transaction>,
     fee_schedule: FeeSchedule,
 }
 
 impl Ledger {
-    pub fn new(fee_schedule: FeeSchedule) -> Self {
+    pub fn new(currency: Currency) -> Self {
         Self {
+            currency,
             accounts: HashMap::new(),
             transactions: Vec::new(),
-            fee_schedule,
+            fee_schedule: FeeSchedule::default(),
         }
     }
 
-    pub fn add_account(&mut self, account: Account) {
+    pub fn add_account(&mut self, account: Account) -> Result<(), String> {
+        if account.currency != self.currency {
+            return Err("Account currency does not match ledger currency".into());
+        }
         self.accounts.insert(account.id, account);
+        Ok(())
     }
 
     fn record(&mut self, transaction: Transaction) {
@@ -163,11 +169,11 @@ impl Ledger {
             .ok_or_else(|| format!("Account {:?} not found", id))
     }
 
-    pub fn balance_for(&self, account: AccountId, currency: Currency) -> i64 {
+    pub fn balance_for(&self, account: AccountId) -> i64 {
         self.transactions
             .iter()
             .flat_map(|transaction| transaction.entries.iter())
-            .filter(|entry| entry.account == account && entry.amount.currency == currency)
+            .filter(|entry| entry.account == account && entry.amount.currency == self.currency)
             .map(|entry| entry.amount.amount_cents)
             .sum()
     }
@@ -180,6 +186,9 @@ impl Ledger {
     ) -> Result<(), String> {
         if amount.amount_cents <= 0 {
             return Err(String::from("Invalid amount: Must be greater than 0"));
+        }
+        if amount.currency != self.currency {
+            return Err("Deposit currency does not match ledger currency".into());
         }
         let transaction = Transaction {
             id: TransactionId(self.transactions.len() as u64 + 1),
@@ -206,16 +215,12 @@ impl Ledger {
             return Err(String::from("Invalid amount: Must be greater than 0"));
         }
 
-        let sender = self.account(from)?;
-        let receiver = self.account(to)?;
-
-        if sender.currency != amount.currency {
-            return Err("Transfer currency does not match sender account".into());
+        if amount.currency != self.currency {
+            return Err("Transfer currency does not match ledger currency".into());
         }
 
-        if receiver.currency != amount.currency {
-            return Err("Transfer currency does not match receiver account".into());
-        }
+        self.account(from)?;
+        self.account(to)?;
 
         Ok(())
     }
@@ -230,12 +235,9 @@ impl Ledger {
     ) -> Result<(), String> {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
 
-        let fee = self
-            .fee_schedule
-            .policy_for(channel)
-            .fee_for(amount.currency);
+        let fee = self.fee_schedule.fee_for(channel, self.currency);
         let total_debit = amount.amount_cents + fee.amount_cents;
-        if total_debit > self.balance_for(sender, amount.currency) {
+        if total_debit > self.balance_for(sender) {
             return Err(String::from("Insufficient funds"));
         }
 
@@ -276,19 +278,19 @@ impl Ledger {
         channel: TransactionChannel,
         fee_account: AccountId,
     ) -> Result<(), String> {
-        let account = self.account(account_id)?;
+        self.account(account_id)?;
 
         if amount.amount_cents <= 0 {
             return Err(String::from("Invalid amount: Must be greater than 0"));
         }
 
-        if account.currency != amount.currency {
-            return Err("Withdrawal currency does not match account currency".into());
+        if amount.currency != self.currency {
+            return Err("Withdrawal currency does not match ledger currency".into());
         }
 
-        let fee = self.fee_schedule.fee_for(channel, amount.currency);
+        let fee = self.fee_schedule.fee_for(channel, self.currency);
         let total_debit = amount.amount_cents + fee.amount_cents;
-        let balance = self.balance_for(account_id, amount.currency);
+        let balance = self.balance_for(account_id);
 
         if balance < total_debit {
             return Err(String::from("Insufficient funds"));
@@ -389,7 +391,7 @@ mod tests {
 
     impl Ledger {
         fn with_accounts(first: (&str, i64), second: (&str, i64)) -> (Self, Account, Account) {
-            let mut ledger = Self::default();
+            let mut ledger = Self::new(CURRENCY);
             let first_account = account(&mut ledger, first.0, first.1);
             let second_account = account(&mut ledger, second.0, second.1);
             (ledger, first_account, second_account)
@@ -398,7 +400,7 @@ mod tests {
 
     #[test]
     fn rejects_same_sender_and_receiver() {
-        let mut ledger = Ledger::default();
+        let mut ledger = Ledger::new(CURRENCY);
         let sender = account(&mut ledger, "Alice", 1_000);
 
         assert!(
@@ -449,8 +451,8 @@ mod tests {
 
         transfer(&mut ledger, sender.id, receiver.id, 30_000).unwrap();
 
-        assert_eq!(ledger.balance_for(sender.id, CURRENCY), 70_000);
-        assert_eq!(ledger.balance_for(receiver.id, CURRENCY), 130_000);
+        assert_eq!(ledger.balance_for(sender.id), 70_000);
+        assert_eq!(ledger.balance_for(receiver.id), 130_000);
     }
 
     #[test]
@@ -460,8 +462,8 @@ mod tests {
 
         transfer(&mut ledger, sender.id, receiver.id, 30_000).unwrap();
 
-        assert_eq!(ledger.balance_for(sender.id, CURRENCY), 70_000);
-        assert_eq!(ledger.balance_for(receiver.id, CURRENCY), 130_000);
+        assert_eq!(ledger.balance_for(sender.id), 70_000);
+        assert_eq!(ledger.balance_for(receiver.id), 130_000);
     }
 
     #[test]
@@ -470,8 +472,8 @@ mod tests {
             Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
 
         assert!(transfer(&mut ledger, sender.id, receiver.id, 0).is_err());
-        assert_eq!(ledger.balance_for(sender.id, CURRENCY), 100_000);
-        assert_eq!(ledger.balance_for(receiver.id, CURRENCY), 100_000);
+        assert_eq!(ledger.balance_for(sender.id), 100_000);
+        assert_eq!(ledger.balance_for(receiver.id), 100_000);
     }
 
     #[test]
@@ -481,8 +483,8 @@ mod tests {
 
         transfer(&mut ledger, sender.id, receiver.id, 10_000).unwrap();
 
-        assert_eq!(ledger.balance_for(sender.id, CURRENCY), 90_000);
-        assert_eq!(ledger.balance_for(receiver.id, CURRENCY), 60_000);
+        assert_eq!(ledger.balance_for(sender.id), 90_000);
+        assert_eq!(ledger.balance_for(receiver.id), 60_000);
     }
 
     #[test]
@@ -491,8 +493,8 @@ mod tests {
             Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
 
         assert!(transfer(&mut ledger, sender.id, receiver.id, 900_000).is_err());
-        assert_eq!(ledger.balance_for(sender.id, CURRENCY), 100_000);
-        assert_eq!(ledger.balance_for(receiver.id, CURRENCY), 100_000);
+        assert_eq!(ledger.balance_for(sender.id), 100_000);
+        assert_eq!(ledger.balance_for(receiver.id), 100_000);
     }
 
     #[test]
@@ -502,8 +504,8 @@ mod tests {
 
         transfer(&mut ledger, sender.id, receiver.id, 100_000).unwrap();
 
-        assert_eq!(ledger.balance_for(sender.id, CURRENCY), 0);
-        assert_eq!(ledger.balance_for(receiver.id, CURRENCY), 150_000);
+        assert_eq!(ledger.balance_for(sender.id), 0);
+        assert_eq!(ledger.balance_for(receiver.id), 150_000);
     }
 
     #[test]
@@ -514,45 +516,45 @@ mod tests {
         transfer(&mut ledger, sender.id, receiver.id, 20_000).unwrap();
         transfer(&mut ledger, sender.id, receiver.id, 30_000).unwrap();
 
-        assert_eq!(ledger.balance_for(sender.id, CURRENCY), 50_000);
-        assert_eq!(ledger.balance_for(receiver.id, CURRENCY), 100_000);
+        assert_eq!(ledger.balance_for(sender.id), 50_000);
+        assert_eq!(ledger.balance_for(receiver.id), 100_000);
     }
 
     #[test]
     fn withdraw_reduces_balance() {
-        let mut ledger = Ledger::default();
+        let mut ledger = Ledger::new(CURRENCY);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 40_000).unwrap();
 
-        assert_eq!(ledger.balance_for(alice.id, CURRENCY), 60_000);
+        assert_eq!(ledger.balance_for(alice.id), 60_000);
     }
 
     #[test]
     fn withdraw_fails_for_zero_amount() {
-        let mut ledger = Ledger::default();
+        let mut ledger = Ledger::new(CURRENCY);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 0).is_err());
-        assert_eq!(ledger.balance_for(alice.id, CURRENCY), 100_000);
+        assert_eq!(ledger.balance_for(alice.id), 100_000);
     }
 
     #[test]
     fn withdraw_fails_for_insufficient_funds() {
-        let mut ledger = Ledger::default();
+        let mut ledger = Ledger::new(CURRENCY);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 900_000).is_err());
-        assert_eq!(ledger.balance_for(alice.id, CURRENCY), 100_000);
+        assert_eq!(ledger.balance_for(alice.id), 100_000);
     }
 
     #[test]
     fn withdraw_exact_balance() {
-        let mut ledger = Ledger::default();
+        let mut ledger = Ledger::new(CURRENCY);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 100_000).unwrap();
 
-        assert_eq!(ledger.balance_for(alice.id, CURRENCY), 0);
+        assert_eq!(ledger.balance_for(alice.id), 0);
     }
 }
