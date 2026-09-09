@@ -178,8 +178,8 @@ struct LedgerEntry {
 pub enum LedgerError {
     AccountNotFound(AccountId),
     InsufficientFunds,
-    InvalidAccount(String),
-    InvalidAmount(String),
+    SameSenderAndReceiver,
+    InvalidAmount,
     CurrencyMismatch,
 }
 
@@ -268,9 +268,7 @@ impl Ledger {
 
     fn validate_amount(&self, amount: Money) -> Result<(), LedgerError> {
         if amount.amount_cents <= 0 {
-            return Err(LedgerError::InvalidAmount(String::from(
-                "Amount must be greater than 0",
-            )));
+            return Err(LedgerError::InvalidAmount);
         }
         if amount.currency != self.currency {
             return Err(LedgerError::CurrencyMismatch);
@@ -303,9 +301,7 @@ impl Ledger {
         amount: Money,
     ) -> Result<(), LedgerError> {
         if from == to {
-            return Err(LedgerError::InvalidAccount(String::from(
-                "Sender and receiver cannot be the same",
-            )));
+            return Err(LedgerError::SameSenderAndReceiver);
         }
 
         self.validate_amount(amount)?;
