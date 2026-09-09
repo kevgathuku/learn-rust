@@ -13,10 +13,28 @@ pub enum Currency {
     Kes,
 }
 
+impl std::fmt::Display for Currency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Currency::Eur => write!(f, "EUR"),
+            Currency::Usd => write!(f, "USD"),
+            Currency::Kes => write!(f, "KES"),
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Money {
     pub amount_cents: i64,
     pub currency: Currency,
+}
+
+impl std::fmt::Display for Money {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let whole = self.amount_cents / 100;
+        let cents = (self.amount_cents % 100).abs();
+        write!(f, "{} {}.{:02}", self.currency, whole, cents)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,18 +248,19 @@ impl Ledger {
             .unwrap_or("external");
         match &tx.kind {
             TransactionKind::Deposit { .. } => {
-                let amount = tx.entries.first().map(|e| e.amount.amount_cents).unwrap_or(0);
-                format!("#{} Deposit {} {} via {:?}", tx.id.0, receiver, amount, tx.channel)
+                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money { amount_cents: 0, currency: self.currency });
+                format!("#{} Deposit {} {} via {:?}", tx.id.0, receiver, money, tx.channel)
             }
             TransactionKind::Withdrawal { .. } => {
-                let amount = tx.entries.first().map(|e| e.amount.amount_cents).unwrap_or(0);
-                format!("#{} Withdrawal {} {} via {:?}", tx.id.0, sender, amount.abs(), tx.channel)
+                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money { amount_cents: 0, currency: self.currency });
+                let abs_money = Money { amount_cents: money.amount_cents.abs(), currency: money.currency };
+                format!("#{} Withdrawal {} {} via {:?}", tx.id.0, sender, abs_money, tx.channel)
             }
             TransactionKind::Transfer { .. } => {
-                let amount = tx.entries.get(1).map(|e| e.amount.amount_cents).unwrap_or(0);
+                let money = tx.entries.get(1).map(|e| e.amount).unwrap_or(Money { amount_cents: 0, currency: self.currency });
                 format!(
                     "#{} {} -> {} {} via {:?}",
-                    tx.id.0, sender, receiver, amount, tx.channel
+                    tx.id.0, sender, receiver, money, tx.channel
                 )
             }
         }
