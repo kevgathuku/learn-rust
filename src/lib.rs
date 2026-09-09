@@ -1,3 +1,5 @@
+pub mod rates;
+
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
@@ -226,6 +228,89 @@ struct LedgerEntry {
     amount: Money,
 }
 
+#[derive(Debug, Clone)]
+pub struct ExchangeRate {
+    pub from: Currency,
+    pub to: Currency,
+    pub rate: f64,
+    pub fetched_at: std::time::SystemTime,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RateError {
+    #[error("rate not found for {0} → {1}")]
+    RateNotFound(Currency, Currency),
+    #[error("rate store unavailable: {0}")]
+    StoreUnavailable(String),
+}
+
+pub trait RateReader {
+    fn get_rate(&self, from: Currency, to: Currency) -> Result<ExchangeRate, RateError>;
+    fn all_rates(&self) -> Result<Vec<ExchangeRate>, RateError>;
+}
+
+impl std::str::FromStr for Currency {
+    type Err = RateError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "EUR" => Ok(Currency::Eur),
+            "USD" => Ok(Currency::Usd),
+            "KES" => Ok(Currency::Kes),
+            _ => Err(RateError::StoreUnavailable(format!(
+                "unknown currency: {s}"
+            ))),
+        }
+    }
+}
+
+pub struct RateCache {
+    rates: std::sync::Arc<arc_swap::ArcSwap<HashMap<(Currency, Currency), ExchangeRate>>>,
+    store: Box<dyn RateReader + Send + Sync>,
+}
+
+impl std::fmt::Debug for RateCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateCache")
+            .field("rates_len", &self.rates.load().len())
+            .finish()
+    }
+}
+
+impl RateCache {
+    pub fn new(store: Box<dyn RateReader + Send + Sync>) -> Self {
+        let cache = Self {
+            rates: std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(HashMap::new())),
+            store,
+        };
+        let _ = cache.refresh();
+        cache
+    }
+
+    pub fn get(&self, from: Currency, to: Currency) -> Option<ExchangeRate> {
+        self.rates.load().get(&(from, to)).cloned()
+    }
+
+    pub fn refresh(&self) -> Result<(), RateError> {
+        let rates = self.store.all_rates()?;
+        let mut map = HashMap::new();
+        for rate in &rates {
+            map.insert((rate.from, rate.to), rate.clone());
+        }
+        self.rates.store(std::sync::Arc::new(map));
+        Ok(())
+    }
+}
+
+impl RateReader for RateCache {
+    fn get_rate(&self, from: Currency, to: Currency) -> Result<ExchangeRate, RateError> {
+        self.get(from, to).ok_or(RateError::RateNotFound(from, to))
+    }
+
+    fn all_rates(&self) -> Result<Vec<ExchangeRate>, RateError> {
+        Ok(self.rates.load().values().cloned().collect())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
     #[error("invalid account {0:?}")]
@@ -246,6 +331,8 @@ pub enum LedgerError {
     NonReversibleTransaction(TransactionId),
     #[error("duplicate transaction (idempotency key already used)")]
     DuplicateTransaction,
+    #[error("rate not found for {0} → {1}")]
+    RateNotFound(Currency, Currency),
 }
 
 fn format_system_time(time: std::time::SystemTime) -> String {
@@ -262,6 +349,7 @@ pub struct Ledger {
     transactions: Vec<Transaction>,
     fee_schedule: FeeSchedule,
     balance_cache: HashMap<AccountId, i64>,
+    rate_cache: Option<RateCache>,
 }
 
 impl Ledger {
@@ -274,17 +362,32 @@ impl Ledger {
             transactions: Vec::new(),
             fee_schedule: FeeSchedule::default(),
             balance_cache: HashMap::new(),
+            rate_cache: None,
+        }
+    }
+
+    pub fn with_rates(
+        currency: Currency,
+        fee_account: Account,
+        external_account: Account,
+        rate_cache: RateCache,
+    ) -> Self {
+        Self {
+            currency,
+            fee_account,
+            external_account,
+            accounts: HashMap::new(),
+            transactions: Vec::new(),
+            fee_schedule: FeeSchedule::default(),
+            balance_cache: HashMap::new(),
+            rate_cache: Some(rate_cache),
         }
     }
 
     pub fn add_account(&mut self, account: Account) -> Result<(), LedgerError> {
-        if account.currency != self.currency {
-            Err(LedgerError::CurrencyMismatch)
-        } else {
-            self.balance_cache.entry(account.id).or_insert(0);
-            self.accounts.insert(account.id, account);
-            Ok(())
-        }
+        self.balance_cache.entry(account.id).or_insert(0);
+        self.accounts.insert(account.id, account);
+        Ok(())
     }
 
     fn record(&mut self, mut transaction: Transaction) {
@@ -381,9 +484,6 @@ impl Ledger {
         if amount.amount_cents <= 0 {
             return Err(LedgerError::InvalidAmount);
         }
-        if amount.currency != self.currency {
-            return Err(LedgerError::CurrencyMismatch);
-        }
         Ok(())
     }
 
@@ -394,7 +494,10 @@ impl Ledger {
         channel: TransactionChannel,
         idempotency_key: Option<String>,
     ) -> Result<(), LedgerError> {
-        self.account(account)?;
+        let acct = self.account(account)?;
+        if amount.currency != acct.currency {
+            return Err(LedgerError::CurrencyMismatch);
+        }
         self.validate_amount(amount)?;
         if let Some(ref key) = idempotency_key
             && self
@@ -436,9 +539,12 @@ impl Ledger {
             return Err(LedgerError::SameSenderAndReceiver);
         }
 
-        self.validate_amount(amount)?;
+        let from_acct = self.account(from)?;
+        if amount.currency != from_acct.currency {
+            return Err(LedgerError::CurrencyMismatch);
+        }
 
-        self.account(from)?;
+        self.validate_amount(amount)?;
         self.account(to)?;
 
         Ok(())
@@ -514,7 +620,10 @@ impl Ledger {
         channel: TransactionChannel,
         idempotency_key: Option<String>,
     ) -> Result<(), LedgerError> {
-        self.account(account_id)?;
+        let acct = self.account(account_id)?;
+        if amount.currency != acct.currency {
+            return Err(LedgerError::CurrencyMismatch);
+        }
 
         self.validate_amount(amount)?;
 
@@ -636,6 +745,132 @@ impl Ledger {
         self.record(transaction);
         Ok(())
     }
+
+    pub fn cross_currency_transfer(
+        &mut self,
+        sender: AccountId,
+        receiver: AccountId,
+        amount: Money,
+        target_currency: Currency,
+        channel: TransactionChannel,
+        idempotency_key: Option<String>,
+    ) -> Result<CrossCurrencyReceipt, LedgerError> {
+        let sender_account = self.account(sender)?;
+        self.account(receiver)?;
+
+        // Validate amount: positive and matches sender's currency
+        if amount.amount_cents <= 0 {
+            return Err(LedgerError::InvalidAmount);
+        }
+        if amount.currency != sender_account.currency {
+            return Err(LedgerError::CurrencyMismatch);
+        }
+
+        if sender == receiver {
+            return Err(LedgerError::SameSenderAndReceiver);
+        }
+
+        if let Some(ref key) = idempotency_key
+            && self
+                .transactions
+                .iter()
+                .any(|t| t.idempotency_key.as_ref() == Some(key))
+        {
+            return Err(LedgerError::DuplicateTransaction);
+        }
+
+        // Same currency — delegate to regular transfer
+        if amount.currency == target_currency {
+            self.transfer(sender, receiver, amount, channel, idempotency_key)?;
+            let tx = self.transactions.last().unwrap();
+            return Ok(CrossCurrencyReceipt {
+                transaction_id: tx.id,
+                sent: amount,
+                received: amount,
+                rate_used: ExchangeRate {
+                    from: amount.currency,
+                    to: target_currency,
+                    rate: 1.0,
+                    fetched_at: std::time::SystemTime::now(),
+                },
+            });
+        }
+
+        // Cross-currency — need rates
+        let cache = self
+            .rate_cache
+            .as_ref()
+            .ok_or(LedgerError::RateNotFound(amount.currency, target_currency))?;
+
+        let rate = cache
+            .get_rate(amount.currency, target_currency)
+            .map_err(|_| LedgerError::RateNotFound(amount.currency, target_currency))?;
+
+        let received_cents = (amount.amount_cents as f64 * rate.rate).round() as i64;
+        let received = Money {
+            amount_cents: received_cents,
+            currency: target_currency,
+        };
+
+        // Fees in sender's currency
+        let fee = self.fee_schedule.fee_for(channel, amount);
+        let total_debit = amount.amount_cents + fee.amount_cents;
+
+        if total_debit > self.balance_for(sender) {
+            return Err(LedgerError::InsufficientFunds);
+        }
+
+        let mut entries = vec![
+            LedgerEntry {
+                account: sender,
+                amount: Money {
+                    amount_cents: -total_debit,
+                    currency: amount.currency,
+                },
+            },
+            LedgerEntry {
+                account: receiver,
+                amount: received,
+            },
+        ];
+
+        if fee.amount_cents > 0 {
+            entries.push(LedgerEntry {
+                account: self.fee_account.id,
+                amount: fee,
+            });
+        }
+
+        let transaction = Transaction {
+            id: TransactionId(self.transactions.len() as u64 + 1),
+            kind: TransactionKind::Transfer {
+                from: sender,
+                to: receiver,
+            },
+            channel,
+            entries,
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            idempotency_key,
+        };
+
+        let receipt = CrossCurrencyReceipt {
+            transaction_id: transaction.id,
+            sent: amount,
+            received,
+            rate_used: rate,
+        };
+
+        self.record(transaction);
+        Ok(receipt)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CrossCurrencyReceipt {
+    pub transaction_id: TransactionId,
+    pub sent: Money,
+    pub received: Money,
+    pub rate_used: ExchangeRate,
 }
 
 #[cfg(test)]
@@ -1005,6 +1240,7 @@ mod tests {
                 agent: FeePolicy::Free,
             },
             balance_cache: HashMap::new(),
+            rate_cache: None,
         };
         let alice = account(&mut ledger, "Alice", 100_000);
         let bob = account(&mut ledger, "Bob", 100_000);
@@ -1048,6 +1284,7 @@ mod tests {
                 agent: FeePolicy::Free,
             },
             balance_cache: HashMap::new(),
+            rate_cache: None,
         };
         let alice = account(&mut ledger, "Alice", 1_000_000);
         let bob = account(&mut ledger, "Bob", 1_000_000);
@@ -1091,6 +1328,7 @@ mod tests {
                 agent: FeePolicy::Free,
             },
             balance_cache: HashMap::new(),
+            rate_cache: None,
         };
         let alice = account(&mut ledger, "Alice", 100_000);
         let bob = account(&mut ledger, "Bob", 100_000);
@@ -1221,6 +1459,7 @@ mod tests {
                 ..FeeSchedule::default()
             },
             balance_cache: HashMap::new(),
+            rate_cache: None,
         };
         let alice = account(&mut ledger, "Alice", 100_000);
         let bob = account(&mut ledger, "Bob", 50_000);
@@ -1486,5 +1725,287 @@ mod tests {
             None,
         );
         assert!(result.is_ok());
+    }
+
+    // --- Cross-currency transfer tests ---
+
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn mock_rate_reader(rates: Vec<ExchangeRate>) -> Box<dyn RateReader + Send + Sync> {
+        struct MockRateReader {
+            rates: HashMap<(Currency, Currency), ExchangeRate>,
+        }
+        impl RateReader for MockRateReader {
+            fn get_rate(&self, from: Currency, to: Currency) -> Result<ExchangeRate, RateError> {
+                if from == to {
+                    return Ok(ExchangeRate {
+                        from,
+                        to,
+                        rate: 1.0,
+                        fetched_at: SystemTime::now(),
+                    });
+                }
+                self.rates
+                    .get(&(from, to))
+                    .cloned()
+                    .ok_or(RateError::RateNotFound(from, to))
+            }
+            fn all_rates(&self) -> Result<Vec<ExchangeRate>, RateError> {
+                Ok(self.rates.values().cloned().collect())
+            }
+        }
+        let mut map = HashMap::new();
+        for rate in rates {
+            map.insert((rate.from, rate.to), rate);
+        }
+        Box::new(MockRateReader { rates: map })
+    }
+
+    fn test_exchange_rate(from: Currency, to: Currency, rate: f64) -> ExchangeRate {
+        ExchangeRate {
+            from,
+            to,
+            rate,
+            fetched_at: UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+        }
+    }
+
+    fn ledger_with_rates(
+        eur_balance: i64,
+        kes_balance: i64,
+        rates: Vec<ExchangeRate>,
+    ) -> (Ledger, Account, Account) {
+        let mut ledger = Ledger::with_rates(
+            Currency::Eur,
+            bank_fee_account(),
+            external_account(),
+            RateCache::new(mock_rate_reader(rates)),
+        );
+        let alice = Account {
+            id: AccountId(1),
+            name: "Alice".into(),
+            currency: Currency::Eur,
+        };
+        let brian = Account {
+            id: AccountId(2),
+            name: "Brian".into(),
+            currency: Currency::Kes,
+        };
+        ledger.add_account(alice.clone()).unwrap();
+        ledger.add_account(brian.clone()).unwrap();
+        ledger
+            .deposit(
+                alice.id,
+                Money {
+                    amount_cents: eur_balance,
+                    currency: Currency::Eur,
+                },
+                TransactionChannel::MobileApp,
+                None,
+            )
+            .unwrap();
+        ledger
+            .deposit(
+                brian.id,
+                Money {
+                    amount_cents: kes_balance,
+                    currency: Currency::Kes,
+                },
+                TransactionChannel::MobileApp,
+                None,
+            )
+            .unwrap();
+        (ledger, alice, brian)
+    }
+
+    #[test]
+    fn cross_currency_transfer_converts_amount() {
+        let rates = vec![test_exchange_rate(Currency::Eur, Currency::Kes, 130.0)];
+        let (mut ledger, alice, brian) = ledger_with_rates(100_000, 50_000, rates);
+
+        let receipt = ledger
+            .cross_currency_transfer(
+                alice.id,
+                brian.id,
+                Money {
+                    amount_cents: 10_000,
+                    currency: Currency::Eur,
+                },
+                Currency::Kes,
+                TransactionChannel::Web,
+                None,
+            )
+            .unwrap();
+
+        // 100 EUR * 130 = 13,000 KES
+        assert_eq!(receipt.sent.amount_cents, 10_000);
+        assert_eq!(receipt.sent.currency, Currency::Eur);
+        assert_eq!(receipt.received.amount_cents, 1_300_000);
+        assert_eq!(receipt.received.currency, Currency::Kes);
+        assert_eq!(receipt.rate_used.rate, 130.0);
+
+        // Alice debited 100 EUR, Brian credited 1,300,000 KES
+        assert_eq!(ledger.balance_for(alice.id), 90_000);
+        assert_eq!(ledger.balance_for(brian.id), 50_000 + 1_300_000);
+    }
+
+    #[test]
+    fn cross_currency_same_currency_delegates_to_transfer() {
+        let rates = vec![test_exchange_rate(Currency::Eur, Currency::Eur, 1.0)];
+        let mut ledger = Ledger::with_rates(
+            Currency::Eur,
+            bank_fee_account(),
+            external_account(),
+            RateCache::new(mock_rate_reader(rates)),
+        );
+        let alice = Account {
+            id: AccountId(10),
+            name: "Alice".into(),
+            currency: Currency::Eur,
+        };
+        let brian = Account {
+            id: AccountId(11),
+            name: "Brian".into(),
+            currency: Currency::Eur,
+        };
+        ledger.add_account(alice.clone()).unwrap();
+        ledger.add_account(brian.clone()).unwrap();
+        let eur_100k = Money {
+            amount_cents: 100_000,
+            currency: Currency::Eur,
+        };
+        let eur_50k = Money {
+            amount_cents: 50_000,
+            currency: Currency::Eur,
+        };
+        let eur_10k = Money {
+            amount_cents: 10_000,
+            currency: Currency::Eur,
+        };
+        ledger
+            .deposit(alice.id, eur_100k, TransactionChannel::MobileApp, None)
+            .unwrap();
+        ledger
+            .deposit(brian.id, eur_50k, TransactionChannel::MobileApp, None)
+            .unwrap();
+
+        let receipt = ledger
+            .cross_currency_transfer(
+                alice.id,
+                brian.id,
+                eur_10k,
+                Currency::Eur,
+                TransactionChannel::Web,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(receipt.sent.amount_cents, 10_000);
+        assert_eq!(receipt.received.amount_cents, 10_000);
+        assert_eq!(receipt.rate_used.rate, 1.0);
+    }
+
+    #[test]
+    fn cross_currency_missing_rate_returns_error() {
+        let rates = vec![]; // no rates
+        let (mut ledger, alice, brian) = ledger_with_rates(100_000, 50_000, rates);
+
+        let result = ledger.cross_currency_transfer(
+            alice.id,
+            brian.id,
+            Money {
+                amount_cents: 10_000,
+                currency: Currency::Eur,
+            },
+            Currency::Kes,
+            TransactionChannel::Web,
+            None,
+        );
+
+        assert!(matches!(
+            result,
+            Err(LedgerError::RateNotFound(Currency::Eur, Currency::Kes))
+        ));
+    }
+
+    #[test]
+    fn cross_currency_insufficient_funds() {
+        let rates = vec![test_exchange_rate(Currency::Eur, Currency::Kes, 130.0)];
+        let (mut ledger, alice, brian) = ledger_with_rates(1_000, 50_000, rates);
+
+        let result = ledger.cross_currency_transfer(
+            alice.id,
+            brian.id,
+            Money {
+                amount_cents: 10_000, // more than Alice has (1_000 EUR)
+                currency: Currency::Eur,
+            },
+            Currency::Kes,
+            TransactionChannel::Web,
+            None,
+        );
+
+        assert!(matches!(result, Err(LedgerError::InsufficientFunds)));
+    }
+
+    #[test]
+    fn cross_currency_with_fee() {
+        let rates = vec![test_exchange_rate(Currency::Eur, Currency::Kes, 130.0)];
+        let mut ledger = Ledger::with_rates(
+            Currency::Eur,
+            bank_fee_account(),
+            external_account(),
+            RateCache::new(mock_rate_reader(rates)),
+        );
+        ledger
+            .balance_cache
+            .entry(ledger.fee_account.id)
+            .or_insert(0);
+
+        let alice = Account {
+            id: AccountId(1),
+            name: "Alice".into(),
+            currency: Currency::Eur,
+        };
+        let brian = Account {
+            id: AccountId(2),
+            name: "Brian".into(),
+            currency: Currency::Kes,
+        };
+        ledger.add_account(alice.clone()).unwrap();
+        ledger.add_account(brian.clone()).unwrap();
+        ledger
+            .deposit(
+                alice.id,
+                Money {
+                    amount_cents: 100_000,
+                    currency: Currency::Eur,
+                },
+                TransactionChannel::MobileApp,
+                None,
+            )
+            .unwrap();
+
+        // Branch channel charges 200 flat fee
+        let receipt = ledger
+            .cross_currency_transfer(
+                alice.id,
+                brian.id,
+                Money {
+                    amount_cents: 10_000,
+                    currency: Currency::Eur,
+                },
+                Currency::Kes,
+                TransactionChannel::Branch,
+                None,
+            )
+            .unwrap();
+
+        // Alice debited 100 EUR + 2 EUR fee = 102 EUR total
+        assert_eq!(ledger.balance_for(alice.id), 89_800);
+        // Fee account credited 2 EUR
+        assert_eq!(ledger.balance_for(ledger.fee_account.id), 200);
+        // Brian credited 100 EUR * 130 = 13,000 KES (receipt shows 1,300,000 cents)
+        assert_eq!(receipt.received.amount_cents, 1_300_000);
     }
 }

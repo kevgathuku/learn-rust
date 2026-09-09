@@ -47,8 +47,12 @@ Rust learning project. Write idiomatic Rust.
 ### Structure
 
 - `src/lib.rs` — the ledger domain: `Ledger`, `Money`, `FeePolicy`, `FeeSchedule`,
-  `TransactionChannel`, `Account`, etc., with unit tests inline.
-- `src/bin/ledger.rs` — a thin `main()` demo of the ledger API.
+  `TransactionChannel`, `Account`, `ExchangeRate`, `RateCache`, `CrossCurrencyReceipt`,
+  `RateReader` trait, with unit tests inline.
+- `src/rates.rs` — SQLite-backed rate store (`SqliteRateStore`), Frankfurter API client,
+  migrations, with unit tests inline.
+- `src/bin/ledger.rs` — a thin `main()` demo of the ledger API with cross-currency transfer.
+- `src/bin/rate_updater.rs` — periodic rate fetcher that writes to SQLite.
 - `src/bin/{hello,print,variables}.rs` — small Rust syntax exercises, unrelated to
   the ledger.
 
@@ -59,6 +63,10 @@ Rust learning project. Write idiomatic Rust.
   by summing entries, never stored.
 - **One ledger per currency**: `Ledger::new(currency, fee_account)`. All accounts in a
   ledger share its currency. Cross-currency is a separate feature, not a ledger field.
+- **Multi-currency accounts**: accounts can have different currencies. `add_account`
+  does not enforce a currency match with the ledger. `deposit`/`transfer`/`withdraw`
+  validate the amount matches the account's currency. `cross_currency_transfer`
+  validates the amount matches the sender's account currency.
 - **The ledger owns its configuration**: the fee schedule and the fee account are
   fields on `Ledger`, never per-transaction parameters. `transfer`/`withdraw` read
   `self.*`.
@@ -79,6 +87,10 @@ Rust learning project. Write idiomatic Rust.
   human-readable output.
 - **Transaction metadata via entries**: `sender()`/`receiver()` methods on `Transaction`
   derive from entry signs, not from `TransactionKind` fields.
+- **Cross-currency transfers**: `cross_currency_transfer()` fetches rates from `RateCache`,
+  converts the amount, debits sender in their currency, credits receiver in target currency.
+  Fees are charged in the sender's currency. Returns `CrossCurrencyReceipt` with both
+  sent/received amounts and the rate used.
 
 ### Testing
 
@@ -87,6 +99,18 @@ Rust learning project. Write idiomatic Rust.
 - Helpers: `with_accounts`, a per-test fee account const, and an `AtomicU64`
   counter for unique account ids (tests run in parallel).
 - TDD for bugs: add a failing test first, then the smallest fix.
+
+### Rates
+
+- `src/rates.rs` — `SqliteRateStore` wraps `rusqlite::Connection` with a `Mutex` for
+  thread safety. Uses `rusqlite_migration` with `user_version` for schema tracking.
+- `RateReader` trait abstracts rate sources — `SqliteRateStore`, `RateCache`, or mocks.
+- `RateCache` wraps `ArcSwap<HashMap>` for lock-free reads. Calls `refresh()` to reload
+  from the underlying store.
+- `fetch_frankfurter()` calls the Frankfurter API v2 (`api.frankfurter.dev/v2/rates`),
+  parses the flat array response, and returns rates in both directions.
+- `src/bin/rate_updater.rs` — separate binary that fetches rates periodically (default
+  1 hour) and writes to SQLite.
 
 ### Verification — always run before done
 
