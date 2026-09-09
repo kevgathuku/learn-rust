@@ -267,6 +267,7 @@ pub struct Ledger {
     accounts: HashMap<AccountId, Account>,
     transactions: Vec<Transaction>,
     fee_schedule: FeeSchedule,
+    balance_cache: HashMap<AccountId, i64>,
 }
 
 impl Ledger {
@@ -278,6 +279,7 @@ impl Ledger {
             accounts: HashMap::new(),
             transactions: Vec::new(),
             fee_schedule: FeeSchedule::default(),
+            balance_cache: HashMap::new(),
         }
     }
 
@@ -285,6 +287,7 @@ impl Ledger {
         if account.currency != self.currency {
             Err(LedgerError::CurrencyMismatch)
         } else {
+            self.balance_cache.entry(account.id).or_insert(0);
             self.accounts.insert(account.id, account);
             Ok(())
         }
@@ -292,6 +295,9 @@ impl Ledger {
 
     fn record(&mut self, mut transaction: Transaction) {
         transaction.timestamp = std::time::SystemTime::now();
+        for entry in &transaction.entries {
+            *self.balance_cache.entry(entry.account).or_insert(0) += entry.amount.amount_cents;
+        }
         self.transactions.push(transaction);
     }
 
@@ -302,12 +308,7 @@ impl Ledger {
     }
 
     pub fn balance_for(&self, account: AccountId) -> i64 {
-        self.transactions
-            .iter()
-            .flat_map(|transaction| transaction.entries.iter())
-            .filter(|entry| entry.account == account && entry.amount.currency == self.currency)
-            .map(|entry| entry.amount.amount_cents)
-            .sum()
+        *self.balance_cache.get(&account).unwrap_or(&0)
     }
 
     pub fn transactions(&self) -> &[Transaction] {
@@ -688,6 +689,14 @@ mod tests {
     impl Ledger {
         fn with_accounts(first: (&str, i64), second: (&str, i64)) -> (Self, Account, Account) {
             let mut ledger = Self::new(CURRENCY, bank_fee_account(), external_account());
+            ledger
+                .balance_cache
+                .entry(ledger.fee_account.id)
+                .or_insert(0);
+            ledger
+                .balance_cache
+                .entry(ledger.external_account.id)
+                .or_insert(0);
             let first_account = account(&mut ledger, first.0, first.1);
             let second_account = account(&mut ledger, second.0, second.1);
             (ledger, first_account, second_account)
@@ -946,6 +955,7 @@ mod tests {
                 branch: FeePolicy::Free,
                 agent: FeePolicy::Free,
             },
+            balance_cache: HashMap::new(),
         };
         let alice = account(&mut ledger, "Alice", 100_000);
         let bob = account(&mut ledger, "Bob", 100_000);
@@ -987,6 +997,7 @@ mod tests {
                 branch: FeePolicy::Free,
                 agent: FeePolicy::Free,
             },
+            balance_cache: HashMap::new(),
         };
         let alice = account(&mut ledger, "Alice", 1_000_000);
         let bob = account(&mut ledger, "Bob", 1_000_000);
@@ -1028,6 +1039,7 @@ mod tests {
                 branch: FeePolicy::Free,
                 agent: FeePolicy::Free,
             },
+            balance_cache: HashMap::new(),
         };
         let alice = account(&mut ledger, "Alice", 100_000);
         let bob = account(&mut ledger, "Bob", 100_000);
@@ -1150,6 +1162,7 @@ mod tests {
                 mobile_app: FeePolicy::Flat { amount_cents: 200 },
                 ..FeeSchedule::default()
             },
+            balance_cache: HashMap::new(),
         };
         let alice = account(&mut ledger, "Alice", 100_000);
         let bob = account(&mut ledger, "Bob", 50_000);
@@ -1267,5 +1280,52 @@ mod tests {
         let after = std::time::SystemTime::now();
         let tx = ledger.transactions.last().unwrap();
         assert!(tx.timestamp() >= before && tx.timestamp() <= after);
+    }
+
+    #[test]
+    fn balance_uses_cache() {
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
+        let alice = account(&mut ledger, "Alice", 100_000);
+        // Directly manipulate cache to verify it's being used
+        *ledger.balance_cache.get_mut(&alice.id).unwrap() = 999_999;
+        assert_eq!(ledger.balance_for(alice.id), 999_999);
+    }
+
+    #[test]
+    fn balance_cache_matches_computed_balance() {
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 50_000));
+        ledger
+            .deposit(sender.id, money(10_000), TransactionChannel::MobileApp)
+            .unwrap();
+        ledger
+            .transfer(
+                sender.id,
+                receiver.id,
+                money(30_000),
+                TransactionChannel::Web,
+            )
+            .unwrap();
+        ledger
+            .withdraw(receiver.id, money(5_000), TransactionChannel::MobileApp)
+            .unwrap();
+
+        // Test all accounts
+        for account_id in &[
+            sender.id,
+            receiver.id,
+            ledger.fee_account.id,
+            ledger.external_account.id,
+        ] {
+            let cached = ledger.balance_for(*account_id);
+            let computed: i64 = ledger
+                .transactions
+                .iter()
+                .flat_map(|t| t.entries.iter())
+                .filter(|e| e.account == *account_id)
+                .map(|e| e.amount.amount_cents)
+                .sum();
+            assert_eq!(cached, computed, "Balance mismatch for {:?}", account_id);
+        }
     }
 }
