@@ -262,16 +262,34 @@ impl Ledger {
             .unwrap_or("external");
         match &tx.kind {
             TransactionKind::Deposit { .. } => {
-                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money { amount_cents: 0, currency: self.currency });
-                format!("#{} Deposit {} {} via {:?}", tx.id.0, receiver, money, tx.channel)
+                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money {
+                    amount_cents: 0,
+                    currency: self.currency,
+                });
+                format!(
+                    "#{} Deposit {} {} via {:?}",
+                    tx.id.0, receiver, money, tx.channel
+                )
             }
             TransactionKind::Withdrawal { .. } => {
-                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money { amount_cents: 0, currency: self.currency });
-                let abs_money = Money { amount_cents: money.amount_cents.abs(), currency: money.currency };
-                format!("#{} Withdrawal {} {} via {:?}", tx.id.0, sender, abs_money, tx.channel)
+                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money {
+                    amount_cents: 0,
+                    currency: self.currency,
+                });
+                let abs_money = Money {
+                    amount_cents: money.amount_cents.abs(),
+                    currency: money.currency,
+                };
+                format!(
+                    "#{} Withdrawal {} {} via {:?}",
+                    tx.id.0, sender, abs_money, tx.channel
+                )
             }
             TransactionKind::Transfer { .. } => {
-                let money = tx.entries.get(1).map(|e| e.amount).unwrap_or(Money { amount_cents: 0, currency: self.currency });
+                let money = tx.entries.get(1).map(|e| e.amount).unwrap_or(Money {
+                    amount_cents: 0,
+                    currency: self.currency,
+                });
                 format!(
                     "#{} {} -> {} {} via {:?}",
                     tx.id.0, sender, receiver, money, tx.channel
@@ -553,18 +571,27 @@ mod tests {
             Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
         let invalid_id = AccountId(999_999);
 
-        let result = ledger.transfer(invalid_id, receiver.id, money(1_000), TransactionChannel::MobileApp);
+        let result = ledger.transfer(
+            invalid_id,
+            receiver.id,
+            money(1_000),
+            TransactionChannel::MobileApp,
+        );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
     }
 
     #[test]
     fn rejects_transfer_to_invalid_account() {
-        let (mut ledger, sender, _) =
-            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+        let (mut ledger, sender, _) = Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
         let invalid_id = AccountId(999_999);
 
-        let result = ledger.transfer(sender.id, invalid_id, money(1_000), TransactionChannel::MobileApp);
+        let result = ledger.transfer(
+            sender.id,
+            invalid_id,
+            money(1_000),
+            TransactionChannel::MobileApp,
+        );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
     }
