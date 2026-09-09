@@ -273,6 +273,10 @@ pub trait RateReader {
     fn all_rates(&self) -> Result<Vec<ExchangeRate>, RateError>;
 }
 
+pub trait RateSource {
+    fn fetch(&self) -> Result<Vec<ExchangeRate>, RateError>;
+}
+
 impl std::str::FromStr for Currency {
     type Err = RateError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {

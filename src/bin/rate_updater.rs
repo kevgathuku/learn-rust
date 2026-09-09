@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use hello_world::rates::{SqliteRateStore, fetch_frankfurter};
+use hello_world::RateSource;
+use hello_world::rates::{Frankfurter, SqliteRateStore};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -17,8 +18,10 @@ fn main() {
         }
     };
 
+    let source: Box<dyn RateSource> = Box::new(Frankfurter::new());
+
     loop {
-        match fetch_frankfurter() {
+        match source.fetch() {
             Ok(rates) => {
                 let count = rates.len();
                 match store.upsert_rates(&rates) {

@@ -3,9 +3,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
-use serde::Deserialize;
 
-use crate::{Currency, ExchangeRate, RateError, RateReader};
+use crate::{Currency, ExchangeRate, RateError, RateReader, RateSource};
+use serde::Deserialize;
 
 static RATE_MIGRATIONS: LazyLock<Migrations> = LazyLock::new(|| {
     Migrations::new(vec![M::up(
@@ -164,55 +164,79 @@ struct FrankfurterRate {
     rate: f64,
 }
 
-pub fn fetch_frankfurter() -> Result<Vec<ExchangeRate>, RateError> {
-    let bases = [
-        Currency::Usd,
-        Currency::Eur,
-        Currency::Kes,
-        Currency::Gbp,
-        Currency::Jpy,
-        Currency::Chf,
-        Currency::Cad,
-        Currency::Aud,
-        Currency::Cny,
-        Currency::Inr,
-        Currency::Brl,
-        Currency::Tzs,
-        Currency::Ugx,
-        Currency::Rwf,
-        Currency::Zar,
-    ];
-    let now = SystemTime::now();
-    let mut rates = Vec::new();
+pub struct Frankfurter {
+    bases: Vec<Currency>,
+}
 
-    for base in &bases {
-        let url = format!("https://api.frankfurter.dev/v2/rates?base={base}");
-        let body: String = ureq::get(&url)
-            .call()
-            .map_err(|e| RateError::StoreUnavailable(format!("Frankfurter request failed: {e}")))?
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| RateError::StoreUnavailable(format!("Failed to read response: {e}")))?;
-
-        let resp: Vec<FrankfurterRate> = serde_json::from_str(&body)
-            .map_err(|e| RateError::StoreUnavailable(format!("Failed to parse response: {e}")))?;
-
-        for entry in &resp {
-            if let (Ok(from), Ok(to)) = (
-                entry.base.parse::<Currency>(),
-                entry.quote.parse::<Currency>(),
-            ) {
-                rates.push(ExchangeRate {
-                    from,
-                    to,
-                    rate: entry.rate,
-                    fetched_at: now,
-                });
-            }
+impl Frankfurter {
+    pub fn new() -> Self {
+        Self {
+            bases: vec![
+                Currency::Usd,
+                Currency::Eur,
+                Currency::Kes,
+                Currency::Gbp,
+                Currency::Jpy,
+                Currency::Chf,
+                Currency::Cad,
+                Currency::Aud,
+                Currency::Cny,
+                Currency::Inr,
+                Currency::Brl,
+                Currency::Tzs,
+                Currency::Ugx,
+                Currency::Rwf,
+                Currency::Zar,
+            ],
         }
     }
+}
 
-    Ok(rates)
+impl Default for Frankfurter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RateSource for Frankfurter {
+    fn fetch(&self) -> Result<Vec<ExchangeRate>, RateError> {
+        let now = SystemTime::now();
+        let mut rates = Vec::new();
+
+        for base in &self.bases {
+            let url = format!("https://api.frankfurter.dev/v2/rates?base={base}");
+            let body: String = ureq::get(&url)
+                .call()
+                .map_err(|e| {
+                    RateError::StoreUnavailable(format!("Frankfurter request failed: {e}"))
+                })?
+                .body_mut()
+                .read_to_string()
+                .map_err(|e| {
+                    RateError::StoreUnavailable(format!("Failed to read response: {e}"))
+                })?;
+
+            let resp: Vec<FrankfurterRate> = serde_json::from_str(&body).map_err(|e| {
+                RateError::StoreUnavailable(format!("Failed to parse response: {e}"))
+            })?;
+
+            for entry in &resp {
+                if let (Ok(from), Ok(to)) = (
+                    entry.base.parse::<Currency>(),
+                    entry.quote.parse::<Currency>(),
+                ) {
+                    rates.push(ExchangeRate {
+                        from,
+                        to,
+                        rate: entry.rate,
+                        fetched_at: now,
+                    });
+                }
+            }
+        }
+
+        Ok(rates)
+    }
 }
 
 #[cfg(test)]
