@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -190,12 +188,7 @@ impl Ledger {
             .sum()
     }
 
-    pub fn deposit(
-        &mut self,
-        account: AccountId,
-        amount: Money,
-        channel: TransactionChannel,
-    ) -> Result<(), LedgerError> {
+    fn validate_amount(&self, amount: Money) -> Result<(), LedgerError> {
         if amount.amount_cents <= 0 {
             return Err(LedgerError::InvalidAmount(String::from(
                 "Amount must be greater than 0",
@@ -204,6 +197,16 @@ impl Ledger {
         if amount.currency != self.currency {
             return Err(LedgerError::CurrencyMismatch);
         }
+        Ok(())
+    }
+
+    pub fn deposit(
+        &mut self,
+        account: AccountId,
+        amount: Money,
+        channel: TransactionChannel,
+    ) -> Result<(), LedgerError> {
+        self.validate_amount(amount)?;
         let transaction = Transaction {
             id: TransactionId(self.transactions.len() as u64 + 1),
             kind: TransactionKind::Deposit { account },
@@ -227,15 +230,7 @@ impl Ledger {
             )));
         }
 
-        if amount.amount_cents <= 0 {
-            return Err(LedgerError::InvalidAmount(String::from(
-                "Amount must be greater than 0",
-            )));
-        }
-
-        if amount.currency != self.currency {
-            return Err(LedgerError::CurrencyMismatch);
-        }
+        self.validate_amount(amount)?;
 
         self.account(from)?;
         self.account(to)?;
@@ -302,15 +297,7 @@ impl Ledger {
     ) -> Result<(), LedgerError> {
         self.account(account_id)?;
 
-        if amount.amount_cents <= 0 {
-            return Err(LedgerError::InvalidAmount(String::from(
-                "Amount must be greater than 0",
-            )));
-        }
-
-        if amount.currency != self.currency {
-            return Err(LedgerError::CurrencyMismatch);
-        }
+        self.validate_amount(amount)?;
 
         let fee = self.fee_schedule.fee_for(channel, self.currency);
         let total_debit = amount.amount_cents + fee.amount_cents;
