@@ -176,7 +176,7 @@ struct LedgerEntry {
 
 #[derive(Debug)]
 pub enum LedgerError {
-    AccountNotFound(AccountId),
+    InvalidAccount(AccountId),
     InsufficientFunds,
     SameSenderAndReceiver,
     InvalidAmount,
@@ -219,7 +219,7 @@ impl Ledger {
     fn account(&self, id: AccountId) -> Result<&Account, LedgerError> {
         self.accounts
             .get(&id)
-            .ok_or(LedgerError::AccountNotFound(id))
+            .ok_or(LedgerError::InvalidAccount(id))
     }
 
     pub fn balance_for(&self, account: AccountId) -> i64 {
@@ -282,6 +282,7 @@ impl Ledger {
         amount: Money,
         channel: TransactionChannel,
     ) -> Result<(), LedgerError> {
+        self.account(account)?;
         self.validate_amount(amount)?;
         let transaction = Transaction {
             id: TransactionId(self.transactions.len() as u64 + 1),
@@ -440,16 +441,17 @@ mod tests {
     fn account(ledger: &mut Ledger, name: &str, balance_cents: i64) -> Account {
         let id = AccountId(NEXT_ACCOUNT_ID.fetch_add(1, Ordering::Relaxed));
 
-        ledger
-            .deposit(id, money(balance_cents), TransactionChannel::MobileApp)
-            .unwrap();
-
         let account = Account {
             id,
             name: name.into(),
             currency: CURRENCY,
         };
         ledger.accounts.insert(id, account.clone());
+
+        ledger
+            .deposit(id, money(balance_cents), TransactionChannel::MobileApp)
+            .unwrap();
+
         account
     }
 
@@ -519,6 +521,48 @@ mod tests {
             Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
 
         assert!(transfer(&mut ledger, sender.id, receiver.id, 900_000).is_err());
+    }
+
+    #[test]
+    fn rejects_deposit_to_invalid_account() {
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let invalid_id = AccountId(999_999);
+
+        let result = ledger.deposit(invalid_id, money(1_000), TransactionChannel::MobileApp);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
+    }
+
+    #[test]
+    fn rejects_transfer_from_invalid_account() {
+        let (mut ledger, _, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+        let invalid_id = AccountId(999_999);
+
+        let result = ledger.transfer(invalid_id, receiver.id, money(1_000), TransactionChannel::MobileApp);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
+    }
+
+    #[test]
+    fn rejects_transfer_to_invalid_account() {
+        let (mut ledger, sender, _) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+        let invalid_id = AccountId(999_999);
+
+        let result = ledger.transfer(sender.id, invalid_id, money(1_000), TransactionChannel::MobileApp);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
+    }
+
+    #[test]
+    fn rejects_withdraw_from_invalid_account() {
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let invalid_id = AccountId(999_999);
+
+        let result = ledger.withdraw(invalid_id, money(1_000), TransactionChannel::MobileApp);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
     }
 
     #[test]
