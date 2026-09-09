@@ -134,6 +134,15 @@ struct LedgerEntry {
 }
 
 #[derive(Debug)]
+pub enum LedgerError {
+    AccountNotFound(AccountId),
+    InsufficientFunds,
+    InvalidAccount(String),
+    InvalidAmount(String),
+    CurrencyMismatch,
+}
+
+#[derive(Debug)]
 pub struct Ledger {
     currency: Currency,
     fee_account: AccountId,
@@ -153,22 +162,23 @@ impl Ledger {
         }
     }
 
-    pub fn add_account(&mut self, account: Account) -> Result<(), String> {
+    pub fn add_account(&mut self, account: Account) -> Result<(), LedgerError> {
         if account.currency != self.currency {
-            return Err("Account currency does not match ledger currency".into());
+            Err(LedgerError::CurrencyMismatch)
+        } else {
+            self.accounts.insert(account.id, account);
+            Ok(())
         }
-        self.accounts.insert(account.id, account);
-        Ok(())
     }
 
     fn record(&mut self, transaction: Transaction) {
         self.transactions.push(transaction);
     }
 
-    fn account(&self, id: AccountId) -> Result<&Account, String> {
+    fn account(&self, id: AccountId) -> Result<&Account, LedgerError> {
         self.accounts
             .get(&id)
-            .ok_or_else(|| format!("Account {:?} not found", id))
+            .ok_or(LedgerError::AccountNotFound(id))
     }
 
     pub fn balance_for(&self, account: AccountId) -> i64 {
@@ -185,12 +195,14 @@ impl Ledger {
         account: AccountId,
         amount: Money,
         channel: TransactionChannel,
-    ) -> Result<(), String> {
+    ) -> Result<(), LedgerError> {
         if amount.amount_cents <= 0 {
-            return Err(String::from("Invalid amount: Must be greater than 0"));
+            return Err(LedgerError::InvalidAmount(String::from(
+                "Amount must be greater than 0",
+            )));
         }
         if amount.currency != self.currency {
-            return Err("Deposit currency does not match ledger currency".into());
+            return Err(LedgerError::CurrencyMismatch);
         }
         let transaction = Transaction {
             id: TransactionId(self.transactions.len() as u64 + 1),
@@ -208,17 +220,21 @@ impl Ledger {
         from: AccountId,
         to: AccountId,
         amount: Money,
-    ) -> Result<(), String> {
+    ) -> Result<(), LedgerError> {
         if from == to {
-            return Err(String::from("Sender and receiver cannot be the same"));
+            return Err(LedgerError::InvalidAccount(String::from(
+                "Sender and receiver cannot be the same",
+            )));
         }
 
         if amount.amount_cents <= 0 {
-            return Err(String::from("Invalid amount: Must be greater than 0"));
+            return Err(LedgerError::InvalidAmount(String::from(
+                "Amount must be greater than 0",
+            )));
         }
 
         if amount.currency != self.currency {
-            return Err("Transfer currency does not match ledger currency".into());
+            return Err(LedgerError::CurrencyMismatch);
         }
 
         self.account(from)?;
@@ -233,13 +249,13 @@ impl Ledger {
         receiver: AccountId,
         amount: Money,
         channel: TransactionChannel,
-    ) -> Result<(), String> {
+    ) -> Result<(), LedgerError> {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
 
         let fee = self.fee_schedule.fee_for(channel, self.currency);
         let total_debit = amount.amount_cents + fee.amount_cents;
         if total_debit > self.balance_for(sender) {
-            return Err(String::from("Insufficient funds"));
+            return Err(LedgerError::InsufficientFunds);
         }
 
         let mut entries = vec![
@@ -283,15 +299,17 @@ impl Ledger {
         account_id: AccountId,
         amount: Money,
         channel: TransactionChannel,
-    ) -> Result<(), String> {
+    ) -> Result<(), LedgerError> {
         self.account(account_id)?;
 
         if amount.amount_cents <= 0 {
-            return Err(String::from("Invalid amount: Must be greater than 0"));
+            return Err(LedgerError::InvalidAmount(String::from(
+                "Amount must be greater than 0",
+            )));
         }
 
         if amount.currency != self.currency {
-            return Err("Withdrawal currency does not match ledger currency".into());
+            return Err(LedgerError::CurrencyMismatch);
         }
 
         let fee = self.fee_schedule.fee_for(channel, self.currency);
@@ -299,7 +317,7 @@ impl Ledger {
         let balance = self.balance_for(account_id);
 
         if balance < total_debit {
-            return Err(String::from("Insufficient funds"));
+            return Err(LedgerError::InsufficientFunds);
         }
 
         let mut entries = vec![LedgerEntry {
@@ -372,7 +390,7 @@ mod tests {
         sender: AccountId,
         receiver: AccountId,
         amount_cents: i64,
-    ) -> Result<(), String> {
+    ) -> Result<(), LedgerError> {
         ledger.transfer(
             sender,
             receiver,
@@ -385,7 +403,7 @@ mod tests {
         ledger: &mut Ledger,
         account_id: AccountId,
         amount_cents: i64,
-    ) -> Result<(), String> {
+    ) -> Result<(), LedgerError> {
         ledger.withdraw(
             account_id,
             money(amount_cents),
