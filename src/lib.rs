@@ -241,6 +241,28 @@ impl Ledger {
             return Err(String::from("Insufficient funds"));
         }
 
+        let mut entries = vec![
+            LedgerEntry {
+                account: sender,
+                amount: Money {
+                    amount_cents: -total_debit,
+                    currency: amount.currency,
+                },
+            },
+            LedgerEntry {
+                account: receiver,
+                amount,
+            },
+        ];
+
+        // Record fees if applicable
+        if fee.amount_cents > 0 {
+            entries.push(LedgerEntry {
+                account: fee_account,
+                amount: fee,
+            });
+        }
+
         let transaction = Transaction {
             id: TransactionId(self.transactions.len() as u64 + 1),
             kind: TransactionKind::Transfer {
@@ -248,23 +270,7 @@ impl Ledger {
                 to: receiver,
             },
             channel,
-            entries: vec![
-                LedgerEntry {
-                    account: sender,
-                    amount: Money {
-                        amount_cents: -total_debit,
-                        currency: amount.currency,
-                    },
-                },
-                LedgerEntry {
-                    account: receiver,
-                    amount,
-                },
-                LedgerEntry {
-                    account: fee_account,
-                    amount: fee,
-                },
-            ],
+            entries,
         };
 
         self.record(transaction);
@@ -518,6 +524,56 @@ mod tests {
 
         assert_eq!(ledger.balance_for(sender.id), 50_000);
         assert_eq!(ledger.balance_for(receiver.id), 100_000);
+    }
+
+    #[test]
+    fn free_transfer_skips_fee_entry() {
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+
+        ledger
+            .transfer(
+                sender.id,
+                receiver.id,
+                money(10_000),
+                TransactionChannel::MobileApp,
+                BANK_FEE_ACCOUNT,
+            )
+            .unwrap();
+
+        let entries = &ledger.transactions.last().unwrap().entries;
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.account != BANK_FEE_ACCOUNT)
+        );
+    }
+
+    #[test]
+    fn fee_charging_transfer_records_fee_entry() {
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+
+        ledger
+            .transfer(
+                sender.id,
+                receiver.id,
+                money(10_000),
+                TransactionChannel::Branch,
+                BANK_FEE_ACCOUNT,
+            )
+            .unwrap();
+
+        let entries = &ledger.transactions.last().unwrap().entries;
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.account == BANK_FEE_ACCOUNT)
+                .map(|entry| entry.amount.amount_cents),
+            Some(200)
+        );
     }
 
     #[test]
