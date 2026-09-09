@@ -95,3 +95,5 @@ cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 ```
+
+Format all code before committing: `cargo fmt --all`
