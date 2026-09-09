@@ -1,4 +1,4 @@
-use hello_world::{Account, AccountId, Currency, Ledger, Money, TransactionChannel};
+use hello_world::{Account, AccountId, Currency, Ledger, Money, TransactionChannel, TransactionId};
 
 fn main() {
     let alice = Account {
@@ -48,7 +48,20 @@ fn main() {
     println!("Alice: {}", ledger.balance_for(alice.id));
     println!("Brian: {}", ledger.balance_for(brian.id));
 
-    println!("\nTransactions:");
+    // Reverse the transfer — money returns to Alice, Brian loses the funds
+    println!("\n--- Reversing transfer #2 (destination blocked) ---");
+    ledger
+        .reverse(
+            TransactionId(2),
+            "Destination blocked",
+            TransactionChannel::MobileApp,
+        )
+        .unwrap();
+
+    println!("Alice after reversal: {}", ledger.balance_for(alice.id));
+    println!("Brian after reversal: {}", ledger.balance_for(brian.id));
+
+    println!("\nAll Transactions:");
     for tx in ledger.transactions() {
         println!("  {}", ledger.format_transaction(tx));
     }

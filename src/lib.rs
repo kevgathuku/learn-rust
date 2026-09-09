@@ -4,7 +4,7 @@ use std::collections::HashMap;
 pub struct AccountId(pub u64);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct TransactionId(u64);
+pub struct TransactionId(pub u64);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Currency {
