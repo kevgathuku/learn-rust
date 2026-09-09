@@ -102,18 +102,52 @@ impl Default for FeeSchedule {
 }
 
 #[derive(Debug)]
-enum TransactionKind {
+pub enum TransactionKind {
     Deposit { account: AccountId },
     Withdrawal { account: AccountId },
     Transfer { from: AccountId, to: AccountId },
 }
 
+impl std::fmt::Display for TransactionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransactionKind::Deposit { account } => write!(f, "Deposit to {:?}", account),
+            TransactionKind::Withdrawal { account } => write!(f, "Withdrawal from {:?}", account),
+            TransactionKind::Transfer { from, to } => write!(f, "Transfer {:?} -> {:?}", from, to),
+        }
+    }
+}
+
 #[derive(Debug)]
-struct Transaction {
+pub struct Transaction {
     id: TransactionId,
     kind: TransactionKind,
     channel: TransactionChannel,
     entries: Vec<LedgerEntry>,
+}
+
+impl Transaction {
+    fn sender(&self) -> Option<AccountId> {
+        match &self.kind {
+            TransactionKind::Deposit { .. } => None,
+            TransactionKind::Withdrawal { account } => Some(*account),
+            TransactionKind::Transfer { from, .. } => Some(*from),
+        }
+    }
+
+    fn receiver(&self) -> Option<AccountId> {
+        match &self.kind {
+            TransactionKind::Deposit { account } => Some(*account),
+            TransactionKind::Withdrawal { .. } => None,
+            TransactionKind::Transfer { to, .. } => Some(*to),
+        }
+    }
+}
+
+impl std::fmt::Display for Transaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{} {} via {:?}", self.id.0, self.kind, self.channel)
+    }
 }
 
 #[derive(Debug)]
@@ -177,6 +211,40 @@ impl Ledger {
             .filter(|entry| entry.account == account && entry.amount.currency == self.currency)
             .map(|entry| entry.amount.amount_cents)
             .sum()
+    }
+
+    pub fn transactions(&self) -> &[Transaction] {
+        &self.transactions
+    }
+
+    pub fn format_transaction(&self, tx: &Transaction) -> String {
+        let sender = tx
+            .sender()
+            .and_then(|id| self.accounts.get(&id))
+            .map(|a| a.name.as_str())
+            .unwrap_or("external");
+        let receiver = tx
+            .receiver()
+            .and_then(|id| self.accounts.get(&id))
+            .map(|a| a.name.as_str())
+            .unwrap_or("external");
+        match &tx.kind {
+            TransactionKind::Deposit { .. } => {
+                let amount = tx.entries.first().map(|e| e.amount.amount_cents).unwrap_or(0);
+                format!("#{} Deposit {} {} via {:?}", tx.id.0, receiver, amount, tx.channel)
+            }
+            TransactionKind::Withdrawal { .. } => {
+                let amount = tx.entries.first().map(|e| e.amount.amount_cents).unwrap_or(0);
+                format!("#{} Withdrawal {} {} via {:?}", tx.id.0, sender, amount.abs(), tx.channel)
+            }
+            TransactionKind::Transfer { .. } => {
+                let amount = tx.entries.get(1).map(|e| e.amount.amount_cents).unwrap_or(0);
+                format!(
+                    "#{} {} -> {} {} via {:?}",
+                    tx.id.0, sender, receiver, amount, tx.channel
+                )
+            }
+        }
     }
 
     fn validate_amount(&self, amount: Money) -> Result<(), LedgerError> {
@@ -453,6 +521,10 @@ mod tests {
 
         assert_eq!(ledger.balance_for(sender.id), 70_000);
         assert_eq!(ledger.balance_for(receiver.id), 130_000);
+
+        let tx = ledger.transactions.last().unwrap();
+        assert_eq!(tx.sender(), Some(sender.id));
+        assert_eq!(tx.receiver(), Some(receiver.id));
     }
 
     #[test]
@@ -464,6 +536,10 @@ mod tests {
 
         assert_eq!(ledger.balance_for(sender.id), 70_000);
         assert_eq!(ledger.balance_for(receiver.id), 130_000);
+
+        let tx = ledger.transactions.last().unwrap();
+        assert_eq!(tx.sender(), Some(sender.id));
+        assert_eq!(tx.receiver(), Some(receiver.id));
     }
 
     #[test]
@@ -534,7 +610,11 @@ mod tests {
             )
             .unwrap();
 
-        let entries = &ledger.transactions.last().unwrap().entries;
+        let tx = ledger.transactions.last().unwrap();
+        assert_eq!(tx.sender(), Some(sender.id));
+        assert_eq!(tx.receiver(), Some(receiver.id));
+
+        let entries = &tx.entries;
         assert_eq!(entries.len(), 2);
         assert!(
             entries
@@ -557,7 +637,11 @@ mod tests {
             )
             .unwrap();
 
-        let entries = &ledger.transactions.last().unwrap().entries;
+        let tx = ledger.transactions.last().unwrap();
+        assert_eq!(tx.sender(), Some(sender.id));
+        assert_eq!(tx.receiver(), Some(receiver.id));
+
+        let entries = &tx.entries;
         assert_eq!(entries.len(), 3);
         assert_eq!(
             entries
@@ -576,6 +660,10 @@ mod tests {
         withdraw(&mut ledger, alice.id, 40_000).unwrap();
 
         assert_eq!(ledger.balance_for(alice.id), 60_000);
+
+        let tx = ledger.transactions.last().unwrap();
+        assert_eq!(tx.sender(), Some(alice.id));
+        assert_eq!(tx.receiver(), None);
     }
 
     #[test]

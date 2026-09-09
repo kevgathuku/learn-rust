@@ -38,4 +38,9 @@ fn main() {
 
     println!("Alice: {}", ledger.balance_for(alice.id));
     println!("Brian: {}", ledger.balance_for(brian.id));
+
+    println!("\nTransactions:");
+    for tx in ledger.transactions() {
+        println!("  {}", ledger.format_transaction(tx));
+    }
 }
