@@ -219,16 +219,18 @@ impl std::error::Error for LedgerError {}
 pub struct Ledger {
     currency: Currency,
     fee_account: Account,
+    external_account: Account,
     accounts: HashMap<AccountId, Account>,
     transactions: Vec<Transaction>,
     fee_schedule: FeeSchedule,
 }
 
 impl Ledger {
-    pub fn new(currency: Currency, fee_account: Account) -> Self {
+    pub fn new(currency: Currency, fee_account: Account, external_account: Account) -> Self {
         Self {
             currency,
             fee_account,
+            external_account,
             accounts: HashMap::new(),
             transactions: Vec::new(),
             fee_schedule: FeeSchedule::default(),
@@ -338,7 +340,16 @@ impl Ledger {
             id: TransactionId(self.transactions.len() as u64 + 1),
             kind: TransactionKind::Deposit { account },
             channel,
-            entries: vec![LedgerEntry { account, amount }],
+            entries: vec![
+                LedgerEntry { account, amount },
+                LedgerEntry {
+                    account: self.external_account.id,
+                    amount: Money {
+                        amount_cents: -amount.amount_cents,
+                        currency: amount.currency,
+                    },
+                },
+            ],
         };
 
         self.record(transaction);
@@ -432,14 +443,19 @@ impl Ledger {
             return Err(LedgerError::InsufficientFunds);
         }
 
-        let mut entries = vec![LedgerEntry {
-            account: account_id,
-
-            amount: Money {
-                amount_cents: -total_debit,
-                currency: amount.currency,
+        let mut entries = vec![
+            LedgerEntry {
+                account: account_id,
+                amount: Money {
+                    amount_cents: -total_debit,
+                    currency: amount.currency,
+                },
             },
-        }];
+            LedgerEntry {
+                account: self.external_account.id,
+                amount,
+            },
+        ];
 
         // Record fees if applicable
         if fee.amount_cents > 0 {
@@ -477,6 +493,14 @@ mod tests {
         Account {
             id: AccountId(999),
             name: "Bank KES Fee Account".into(),
+            currency: CURRENCY,
+        }
+    }
+
+    fn external_account() -> Account {
+        Account {
+            id: AccountId(998),
+            name: "External Vault".into(),
             currency: CURRENCY,
         }
     }
@@ -533,7 +557,7 @@ mod tests {
 
     impl Ledger {
         fn with_accounts(first: (&str, i64), second: (&str, i64)) -> (Self, Account, Account) {
-            let mut ledger = Self::new(CURRENCY, bank_fee_account());
+            let mut ledger = Self::new(CURRENCY, bank_fee_account(), external_account());
             let first_account = account(&mut ledger, first.0, first.1);
             let second_account = account(&mut ledger, second.0, second.1);
             (ledger, first_account, second_account)
@@ -542,7 +566,7 @@ mod tests {
 
     #[test]
     fn rejects_same_sender_and_receiver() {
-        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let sender = account(&mut ledger, "Alice", 1_000);
 
         assert!(
@@ -575,7 +599,7 @@ mod tests {
 
     #[test]
     fn rejects_deposit_to_invalid_account() {
-        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let invalid_id = AccountId(999_999);
 
         let result = ledger.deposit(invalid_id, money(1_000), TransactionChannel::MobileApp);
@@ -616,7 +640,7 @@ mod tests {
 
     #[test]
     fn rejects_withdraw_from_invalid_account() {
-        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let invalid_id = AccountId(999_999);
 
         let result = ledger.withdraw(invalid_id, money(1_000), TransactionChannel::MobileApp);
@@ -783,6 +807,7 @@ mod tests {
         let mut ledger = Ledger {
             currency: CURRENCY,
             fee_account: fee_account.clone(),
+            external_account: external_account(),
             accounts: HashMap::new(),
             transactions: Vec::new(),
             fee_schedule: FeeSchedule {
@@ -820,6 +845,7 @@ mod tests {
         let mut ledger = Ledger {
             currency: CURRENCY,
             fee_account: fee_account.clone(),
+            external_account: external_account(),
             accounts: HashMap::new(),
             transactions: Vec::new(),
             fee_schedule: FeeSchedule {
@@ -860,6 +886,7 @@ mod tests {
         let mut ledger = Ledger {
             currency: CURRENCY,
             fee_account: fee_account.clone(),
+            external_account: external_account(),
             accounts: HashMap::new(),
             transactions: Vec::new(),
             fee_schedule: FeeSchedule {
@@ -896,7 +923,7 @@ mod tests {
 
     #[test]
     fn withdraw_reduces_balance() {
-        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 40_000).unwrap();
@@ -910,7 +937,7 @@ mod tests {
 
     #[test]
     fn withdraw_fails_for_zero_amount() {
-        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 0).is_err());
@@ -919,7 +946,7 @@ mod tests {
 
     #[test]
     fn withdraw_fails_for_insufficient_funds() {
-        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 900_000).is_err());
@@ -928,11 +955,55 @@ mod tests {
 
     #[test]
     fn withdraw_exact_balance() {
-        let mut ledger = Ledger::new(CURRENCY, bank_fee_account());
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 100_000).unwrap();
 
         assert_eq!(ledger.balance_for(alice.id), 0);
+    }
+
+    #[test]
+    fn deposit_entries_sum_to_zero() {
+        let (mut ledger, alice, _) = Ledger::with_accounts(("Alice", 100_000), ("Bob", 100_000));
+        ledger
+            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .unwrap();
+        let tx = ledger.transactions.last().unwrap();
+        let sum: i64 = tx.entries.iter().map(|e| e.amount.amount_cents).sum();
+        assert_eq!(sum, 0);
+    }
+
+    #[test]
+    fn withdrawal_entries_sum_to_zero() {
+        let (mut ledger, alice, _) = Ledger::with_accounts(("Alice", 100_000), ("Bob", 100_000));
+        ledger
+            .withdraw(alice.id, money(40_000), TransactionChannel::MobileApp)
+            .unwrap();
+        let tx = ledger.transactions.last().unwrap();
+        let sum: i64 = tx.entries.iter().map(|e| e.amount.amount_cents).sum();
+        assert_eq!(sum, 0);
+    }
+
+    #[test]
+    fn all_transactions_entries_sum_to_zero() {
+        let (mut ledger, alice, bob) = Ledger::with_accounts(("Alice", 100_000), ("Bob", 50_000));
+        ledger
+            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .unwrap();
+        ledger
+            .transfer(alice.id, bob.id, money(30_000), TransactionChannel::Web)
+            .unwrap();
+        ledger
+            .withdraw(bob.id, money(20_000), TransactionChannel::MobileApp)
+            .unwrap();
+        for tx in ledger.transactions() {
+            let sum: i64 = tx.entries.iter().map(|e| e.amount.amount_cents).sum();
+            assert_eq!(
+                sum, 0,
+                "Transaction {:?} entries don't sum to zero",
+                tx.id.0
+            );
+        }
     }
 }

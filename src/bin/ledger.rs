@@ -16,8 +16,13 @@ fn main() {
         name: String::from("Bank KES Fee Account"),
         currency: Currency::Kes,
     };
+    let external_account = Account {
+        id: AccountId(998),
+        name: String::from("External Vault"),
+        currency: Currency::Kes,
+    };
 
-    let mut ledger = Ledger::new(Currency::Kes, bank_fee_account);
+    let mut ledger = Ledger::new(Currency::Kes, bank_fee_account, external_account);
     ledger.add_account(alice.clone()).unwrap();
     ledger.add_account(brian.clone()).unwrap();
 
