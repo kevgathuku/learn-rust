@@ -151,8 +151,8 @@ pub enum TransactionKind {
     },
     Reversal {
         original_transaction_id: TransactionId,
-        from: AccountId,
-        to: AccountId,
+        from: AccountId, // from the original transfer (for display/lookup)
+        to: AccountId,   // from the original transfer (for display/lookup)
         reason: String,
     },
 }
