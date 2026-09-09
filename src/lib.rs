@@ -4,7 +4,7 @@ use std::collections::HashMap;
 pub struct AccountId(pub u64);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-struct TransactionId(u64);
+pub struct TransactionId(u64);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Currency {
@@ -139,9 +139,20 @@ impl Default for FeeSchedule {
 
 #[derive(Debug)]
 pub enum TransactionKind {
-    Deposit { account: AccountId },
-    Withdrawal { account: AccountId },
-    Transfer { from: AccountId, to: AccountId },
+    Deposit {
+        account: AccountId,
+    },
+    Withdrawal {
+        account: AccountId,
+    },
+    Transfer {
+        from: AccountId,
+        to: AccountId,
+    },
+    Reversal {
+        original_transaction_id: TransactionId,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for TransactionKind {
@@ -150,6 +161,10 @@ impl std::fmt::Display for TransactionKind {
             TransactionKind::Deposit { account } => write!(f, "Deposit to {:?}", account),
             TransactionKind::Withdrawal { account } => write!(f, "Withdrawal from {:?}", account),
             TransactionKind::Transfer { from, to } => write!(f, "Transfer {:?} -> {:?}", from, to),
+            TransactionKind::Reversal {
+                original_transaction_id,
+                reason,
+            } => write!(f, "Reversal of #{} ({})", original_transaction_id.0, reason),
         }
     }
 }
@@ -168,6 +183,7 @@ impl Transaction {
             TransactionKind::Deposit { .. } => None,
             TransactionKind::Withdrawal { account } => Some(*account),
             TransactionKind::Transfer { from, .. } => Some(*from),
+            TransactionKind::Reversal { .. } => None,
         }
     }
 
@@ -176,6 +192,7 @@ impl Transaction {
             TransactionKind::Deposit { account } => Some(*account),
             TransactionKind::Withdrawal { .. } => None,
             TransactionKind::Transfer { to, .. } => Some(*to),
+            TransactionKind::Reversal { .. } => None,
         }
     }
 }
@@ -199,6 +216,9 @@ pub enum LedgerError {
     SameSenderAndReceiver,
     InvalidAmount,
     CurrencyMismatch,
+    TransactionNotFound(TransactionId),
+    TransactionAlreadyReversed(TransactionId),
+    NonReversibleTransaction(TransactionId),
 }
 
 impl std::fmt::Display for LedgerError {
@@ -209,6 +229,13 @@ impl std::fmt::Display for LedgerError {
             Self::SameSenderAndReceiver => write!(f, "sender and receiver must differ"),
             Self::InvalidAmount => write!(f, "invalid amount"),
             Self::CurrencyMismatch => write!(f, "currency mismatch"),
+            Self::TransactionNotFound(id) => write!(f, "transaction #{} not found", id.0),
+            Self::TransactionAlreadyReversed(id) => {
+                write!(f, "transaction #{} already reversed", id.0)
+            }
+            Self::NonReversibleTransaction(id) => {
+                write!(f, "transaction #{} cannot be reversed", id.0)
+            }
         }
     }
 }
@@ -313,6 +340,15 @@ impl Ledger {
                 format!(
                     "#{} {} -> {} {} via {:?}",
                     tx.id.0, sender, receiver, money, tx.channel
+                )
+            }
+            TransactionKind::Reversal {
+                original_transaction_id,
+                ..
+            } => {
+                format!(
+                    "#{} Reversal of #{} via {:?}",
+                    tx.id.0, original_transaction_id.0, tx.channel
                 )
             }
         }
@@ -474,6 +510,65 @@ impl Ledger {
             entries,
         };
 
+        self.record(transaction);
+        Ok(())
+    }
+
+    pub fn reverse(
+        &mut self,
+        original_id: TransactionId,
+        reason: &str,
+        channel: TransactionChannel,
+    ) -> Result<(), LedgerError> {
+        // 1. Find the original transaction
+        let original = self
+            .transactions
+            .iter()
+            .find(|t| t.id == original_id)
+            .ok_or(LedgerError::TransactionNotFound(original_id))?;
+
+        // 2. Only transfers can be reversed
+        if !matches!(original.kind, TransactionKind::Transfer { .. }) {
+            return Err(LedgerError::NonReversibleTransaction(original_id));
+        }
+
+        // 3. Check if already reversed
+        let already_reversed = self.transactions.iter().any(|t| {
+            matches!(
+                t.kind,
+                TransactionKind::Reversal {
+                    original_transaction_id,
+                    ..
+                } if original_transaction_id == original_id
+            )
+        });
+        if already_reversed {
+            return Err(LedgerError::TransactionAlreadyReversed(original_id));
+        }
+
+        // 4. Create reversed entries (negate all amounts)
+        let reversed_entries: Vec<LedgerEntry> = original
+            .entries
+            .iter()
+            .map(|entry| LedgerEntry {
+                account: entry.account,
+                amount: Money {
+                    amount_cents: -entry.amount.amount_cents,
+                    currency: entry.amount.currency,
+                },
+            })
+            .collect();
+
+        // 5. Record the reversal transaction
+        let transaction = Transaction {
+            id: TransactionId(self.transactions.len() as u64 + 1),
+            kind: TransactionKind::Reversal {
+                original_transaction_id: original_id,
+                reason: reason.to_string(),
+            },
+            channel,
+            entries: reversed_entries,
+        };
         self.record(transaction);
         Ok(())
     }
@@ -1005,5 +1100,126 @@ mod tests {
                 tx.id.0
             );
         }
+    }
+
+    #[test]
+    fn reversal_of_transfer_refunds_fee() {
+        let fee_account = bank_fee_account();
+        let mut ledger = Ledger {
+            currency: CURRENCY,
+            fee_account: fee_account.clone(),
+            external_account: external_account(),
+            accounts: HashMap::new(),
+            transactions: Vec::new(),
+            fee_schedule: FeeSchedule {
+                mobile_app: FeePolicy::Flat { amount_cents: 200 },
+                ..FeeSchedule::default()
+            },
+        };
+        let alice = account(&mut ledger, "Alice", 100_000);
+        let bob = account(&mut ledger, "Bob", 50_000);
+
+        // Transfer: Alice sends 100.00 + 2.00 fee (transaction #3)
+        ledger
+            .transfer(
+                alice.id,
+                bob.id,
+                money(10_000),
+                TransactionChannel::MobileApp,
+            )
+            .unwrap();
+        assert_eq!(ledger.balance_for(alice.id), 89_800); // 100_000 - 10_000 - 200
+        assert_eq!(ledger.balance_for(bob.id), 60_000); // 50_000 + 10_000
+        assert_eq!(ledger.balance_for(fee_account.id), 200);
+
+        // Reverse the transfer
+        ledger
+            .reverse(
+                TransactionId(3),
+                "Destination blocked",
+                TransactionChannel::MobileApp,
+            )
+            .unwrap();
+
+        // Balances restored
+        assert_eq!(ledger.balance_for(alice.id), 100_000);
+        assert_eq!(ledger.balance_for(bob.id), 50_000);
+        assert_eq!(ledger.balance_for(fee_account.id), 0);
+
+        // Reversal entries sum to zero
+        let reversal_tx = ledger.transactions.last().unwrap();
+        let sum: i64 = reversal_tx
+            .entries
+            .iter()
+            .map(|e| e.amount.amount_cents)
+            .sum();
+        assert_eq!(sum, 0);
+    }
+
+    #[test]
+    fn cannot_reverse_deposit() {
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
+        let alice = account(&mut ledger, "Alice", 100_000);
+        ledger
+            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .unwrap();
+        // Transaction #1 is the deposit from account helper, #2 is the extra deposit
+        let result = ledger.reverse(TransactionId(2), "Mistake", TransactionChannel::MobileApp);
+        assert!(matches!(
+            result,
+            Err(LedgerError::NonReversibleTransaction(_))
+        ));
+    }
+
+    #[test]
+    fn cannot_reverse_withdrawal() {
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
+        let alice = account(&mut ledger, "Alice", 100_000);
+        ledger
+            .withdraw(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .unwrap();
+        // Transaction #1 is the deposit from account helper, #2 is the withdrawal
+        let result = ledger.reverse(TransactionId(2), "Mistake", TransactionChannel::MobileApp);
+        assert!(matches!(
+            result,
+            Err(LedgerError::NonReversibleTransaction(_))
+        ));
+    }
+
+    #[test]
+    fn cannot_reverse_already_reversed() {
+        let (mut ledger, alice, bob) = Ledger::with_accounts(("Alice", 100_000), ("Bob", 50_000));
+        ledger
+            .transfer(
+                alice.id,
+                bob.id,
+                money(10_000),
+                TransactionChannel::MobileApp,
+            )
+            .unwrap();
+        // Transaction #3 is the transfer (after 2 deposits from with_accounts)
+        ledger
+            .reverse(
+                TransactionId(3),
+                "First reversal",
+                TransactionChannel::MobileApp,
+            )
+            .unwrap();
+        let result = ledger.reverse(
+            TransactionId(3),
+            "Second reversal",
+            TransactionChannel::MobileApp,
+        );
+        assert!(matches!(
+            result,
+            Err(LedgerError::TransactionAlreadyReversed(_))
+        ));
+    }
+
+    #[test]
+    fn cannot_reverse_nonexistent_transaction() {
+        let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
+        let result = ledger.reverse(TransactionId(999), "Ghost", TransactionChannel::MobileApp);
+        assert!(matches!(result, Err(LedgerError::TransactionNotFound(_))));
     }
 }
