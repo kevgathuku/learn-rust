@@ -31,7 +31,12 @@ fn main() {
         currency: Currency::Kes,
     };
     ledger
-        .deposit(alice.id, deposit_amount, TransactionChannel::MobileApp)
+        .deposit(
+            alice.id,
+            deposit_amount,
+            TransactionChannel::MobileApp,
+            None,
+        )
         .unwrap();
 
     println!("Alice Before: {}", ledger.balance_for(alice.id));
@@ -42,7 +47,13 @@ fn main() {
         currency: Currency::Kes,
     };
     ledger
-        .transfer(alice.id, brian.id, transfer_amount, TransactionChannel::Web)
+        .transfer(
+            alice.id,
+            brian.id,
+            transfer_amount,
+            TransactionChannel::Web,
+            None,
+        )
         .unwrap();
 
     println!("Alice: {}", ledger.balance_for(alice.id));
@@ -55,6 +66,7 @@ fn main() {
             TransactionId(2),
             "Destination blocked",
             TransactionChannel::MobileApp,
+            None,
         )
         .unwrap();
 

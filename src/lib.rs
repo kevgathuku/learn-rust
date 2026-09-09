@@ -185,6 +185,7 @@ pub struct Transaction {
     channel: TransactionChannel,
     entries: Vec<LedgerEntry>,
     timestamp: std::time::SystemTime,
+    idempotency_key: Option<String>,
 }
 
 impl Transaction {
@@ -213,6 +214,10 @@ impl Transaction {
     pub fn timestamp(&self) -> std::time::SystemTime {
         self.timestamp
     }
+
+    pub fn idempotency_key(&self) -> Option<&str> {
+        self.idempotency_key.as_deref()
+    }
 }
 
 #[derive(Debug)]
@@ -231,6 +236,7 @@ pub enum LedgerError {
     TransactionNotFound(TransactionId),
     TransactionAlreadyReversed(TransactionId),
     NonReversibleTransaction(TransactionId),
+    DuplicateTransaction,
 }
 
 impl std::fmt::Display for LedgerError {
@@ -247,6 +253,9 @@ impl std::fmt::Display for LedgerError {
             }
             Self::NonReversibleTransaction(id) => {
                 write!(f, "transaction #{} cannot be reversed", id.0)
+            }
+            Self::DuplicateTransaction => {
+                write!(f, "duplicate transaction (idempotency key already used)")
             }
         }
     }
@@ -398,9 +407,18 @@ impl Ledger {
         account: AccountId,
         amount: Money,
         channel: TransactionChannel,
+        idempotency_key: Option<String>,
     ) -> Result<(), LedgerError> {
         self.account(account)?;
         self.validate_amount(amount)?;
+        if let Some(ref key) = idempotency_key
+            && self
+                .transactions
+                .iter()
+                .any(|t| t.idempotency_key.as_ref() == Some(key))
+        {
+            return Err(LedgerError::DuplicateTransaction);
+        }
         let transaction = Transaction {
             id: TransactionId(self.transactions.len() as u64 + 1),
             kind: TransactionKind::Deposit { account },
@@ -416,6 +434,7 @@ impl Ledger {
                 },
             ],
             timestamp: std::time::SystemTime::UNIX_EPOCH,
+            idempotency_key,
         };
 
         self.record(transaction);
@@ -446,8 +465,18 @@ impl Ledger {
         receiver: AccountId,
         amount: Money,
         channel: TransactionChannel,
+        idempotency_key: Option<String>,
     ) -> Result<(), LedgerError> {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
+
+        if let Some(ref key) = idempotency_key
+            && self
+                .transactions
+                .iter()
+                .any(|t| t.idempotency_key.as_ref() == Some(key))
+        {
+            return Err(LedgerError::DuplicateTransaction);
+        }
 
         let fee = self.fee_schedule.fee_for(channel, amount);
         let total_debit = amount.amount_cents + fee.amount_cents;
@@ -486,6 +515,7 @@ impl Ledger {
             channel,
             entries,
             timestamp: std::time::SystemTime::UNIX_EPOCH,
+            idempotency_key,
         };
 
         self.record(transaction);
@@ -497,10 +527,20 @@ impl Ledger {
         account_id: AccountId,
         amount: Money,
         channel: TransactionChannel,
+        idempotency_key: Option<String>,
     ) -> Result<(), LedgerError> {
         self.account(account_id)?;
 
         self.validate_amount(amount)?;
+
+        if let Some(ref key) = idempotency_key
+            && self
+                .transactions
+                .iter()
+                .any(|t| t.idempotency_key.as_ref() == Some(key))
+        {
+            return Err(LedgerError::DuplicateTransaction);
+        }
 
         let fee = self.fee_schedule.fee_for(channel, amount);
         let total_debit = amount.amount_cents + fee.amount_cents;
@@ -540,6 +580,7 @@ impl Ledger {
             channel,
             entries,
             timestamp: std::time::SystemTime::UNIX_EPOCH,
+            idempotency_key,
         };
 
         self.record(transaction);
@@ -551,6 +592,7 @@ impl Ledger {
         original_id: TransactionId,
         reason: &str,
         channel: TransactionChannel,
+        idempotency_key: Option<String>,
     ) -> Result<(), LedgerError> {
         // 1. Find the original transaction
         let original = self
@@ -604,6 +646,7 @@ impl Ledger {
             channel,
             entries: reversed_entries,
             timestamp: std::time::SystemTime::UNIX_EPOCH,
+            idempotency_key,
         };
         self.record(transaction);
         Ok(())
@@ -654,7 +697,12 @@ mod tests {
         ledger.accounts.insert(id, account.clone());
 
         ledger
-            .deposit(id, money(balance_cents), TransactionChannel::MobileApp)
+            .deposit(
+                id,
+                money(balance_cents),
+                TransactionChannel::MobileApp,
+                None,
+            )
             .unwrap();
 
         account
@@ -671,6 +719,7 @@ mod tests {
             receiver,
             money(amount_cents),
             TransactionChannel::MobileApp,
+            None,
         )
     }
 
@@ -683,6 +732,7 @@ mod tests {
             account_id,
             money(amount_cents),
             TransactionChannel::MobileApp,
+            None,
         )
     }
 
@@ -741,7 +791,12 @@ mod tests {
         let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let invalid_id = AccountId(999_999);
 
-        let result = ledger.deposit(invalid_id, money(1_000), TransactionChannel::MobileApp);
+        let result = ledger.deposit(
+            invalid_id,
+            money(1_000),
+            TransactionChannel::MobileApp,
+            None,
+        );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
     }
@@ -757,6 +812,7 @@ mod tests {
             receiver.id,
             money(1_000),
             TransactionChannel::MobileApp,
+            None,
         );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
@@ -772,6 +828,7 @@ mod tests {
             invalid_id,
             money(1_000),
             TransactionChannel::MobileApp,
+            None,
         );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
@@ -782,7 +839,12 @@ mod tests {
         let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let invalid_id = AccountId(999_999);
 
-        let result = ledger.withdraw(invalid_id, money(1_000), TransactionChannel::MobileApp);
+        let result = ledger.withdraw(
+            invalid_id,
+            money(1_000),
+            TransactionChannel::MobileApp,
+            None,
+        );
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), LedgerError::InvalidAccount(id) if id == invalid_id));
     }
@@ -895,6 +957,7 @@ mod tests {
                 receiver.id,
                 money(10_000),
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
 
@@ -922,6 +985,7 @@ mod tests {
                 receiver.id,
                 money(10_000),
                 TransactionChannel::Branch,
+                None,
             )
             .unwrap();
 
@@ -967,6 +1031,7 @@ mod tests {
                 bob.id,
                 money(10_000),
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
 
@@ -1009,6 +1074,7 @@ mod tests {
                 bob.id,
                 money(50_000),
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
 
@@ -1051,6 +1117,7 @@ mod tests {
                 bob.id,
                 money(10_000),
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
 
@@ -1109,7 +1176,7 @@ mod tests {
     fn deposit_entries_sum_to_zero() {
         let (mut ledger, alice, _) = Ledger::with_accounts(("Alice", 100_000), ("Bob", 100_000));
         ledger
-            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp, None)
             .unwrap();
         let tx = ledger.transactions.last().unwrap();
         let sum: i64 = tx.entries.iter().map(|e| e.amount.amount_cents).sum();
@@ -1120,7 +1187,7 @@ mod tests {
     fn withdrawal_entries_sum_to_zero() {
         let (mut ledger, alice, _) = Ledger::with_accounts(("Alice", 100_000), ("Bob", 100_000));
         ledger
-            .withdraw(alice.id, money(40_000), TransactionChannel::MobileApp)
+            .withdraw(alice.id, money(40_000), TransactionChannel::MobileApp, None)
             .unwrap();
         let tx = ledger.transactions.last().unwrap();
         let sum: i64 = tx.entries.iter().map(|e| e.amount.amount_cents).sum();
@@ -1131,13 +1198,19 @@ mod tests {
     fn all_transactions_entries_sum_to_zero() {
         let (mut ledger, alice, bob) = Ledger::with_accounts(("Alice", 100_000), ("Bob", 50_000));
         ledger
-            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp, None)
             .unwrap();
         ledger
-            .transfer(alice.id, bob.id, money(30_000), TransactionChannel::Web)
+            .transfer(
+                alice.id,
+                bob.id,
+                money(30_000),
+                TransactionChannel::Web,
+                None,
+            )
             .unwrap();
         ledger
-            .withdraw(bob.id, money(20_000), TransactionChannel::MobileApp)
+            .withdraw(bob.id, money(20_000), TransactionChannel::MobileApp, None)
             .unwrap();
         for tx in ledger.transactions() {
             let sum: i64 = tx.entries.iter().map(|e| e.amount.amount_cents).sum();
@@ -1174,6 +1247,7 @@ mod tests {
                 bob.id,
                 money(10_000),
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
         assert_eq!(ledger.balance_for(alice.id), 89_800); // 100_000 - 10_000 - 200
@@ -1186,6 +1260,7 @@ mod tests {
                 TransactionId(3),
                 "Destination blocked",
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
 
@@ -1209,10 +1284,15 @@ mod tests {
         let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let alice = account(&mut ledger, "Alice", 100_000);
         ledger
-            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .deposit(alice.id, money(10_000), TransactionChannel::MobileApp, None)
             .unwrap();
         // Transaction #1 is the deposit from account helper, #2 is the extra deposit
-        let result = ledger.reverse(TransactionId(2), "Mistake", TransactionChannel::MobileApp);
+        let result = ledger.reverse(
+            TransactionId(2),
+            "Mistake",
+            TransactionChannel::MobileApp,
+            None,
+        );
         assert!(matches!(
             result,
             Err(LedgerError::NonReversibleTransaction(_))
@@ -1224,10 +1304,15 @@ mod tests {
         let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let alice = account(&mut ledger, "Alice", 100_000);
         ledger
-            .withdraw(alice.id, money(10_000), TransactionChannel::MobileApp)
+            .withdraw(alice.id, money(10_000), TransactionChannel::MobileApp, None)
             .unwrap();
         // Transaction #1 is the deposit from account helper, #2 is the withdrawal
-        let result = ledger.reverse(TransactionId(2), "Mistake", TransactionChannel::MobileApp);
+        let result = ledger.reverse(
+            TransactionId(2),
+            "Mistake",
+            TransactionChannel::MobileApp,
+            None,
+        );
         assert!(matches!(
             result,
             Err(LedgerError::NonReversibleTransaction(_))
@@ -1243,6 +1328,7 @@ mod tests {
                 bob.id,
                 money(10_000),
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
         // Transaction #3 is the transfer (after 2 deposits from with_accounts)
@@ -1251,12 +1337,14 @@ mod tests {
                 TransactionId(3),
                 "First reversal",
                 TransactionChannel::MobileApp,
+                None,
             )
             .unwrap();
         let result = ledger.reverse(
             TransactionId(3),
             "Second reversal",
             TransactionChannel::MobileApp,
+            None,
         );
         assert!(matches!(
             result,
@@ -1267,7 +1355,12 @@ mod tests {
     #[test]
     fn cannot_reverse_nonexistent_transaction() {
         let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
-        let result = ledger.reverse(TransactionId(999), "Ghost", TransactionChannel::MobileApp);
+        let result = ledger.reverse(
+            TransactionId(999),
+            "Ghost",
+            TransactionChannel::MobileApp,
+            None,
+        );
         assert!(matches!(result, Err(LedgerError::TransactionNotFound(_))));
     }
 
@@ -1296,7 +1389,12 @@ mod tests {
         let (mut ledger, sender, receiver) =
             Ledger::with_accounts(("Alice", 100_000), ("Brian", 50_000));
         ledger
-            .deposit(sender.id, money(10_000), TransactionChannel::MobileApp)
+            .deposit(
+                sender.id,
+                money(10_000),
+                TransactionChannel::MobileApp,
+                None,
+            )
             .unwrap();
         ledger
             .transfer(
@@ -1304,10 +1402,16 @@ mod tests {
                 receiver.id,
                 money(30_000),
                 TransactionChannel::Web,
+                None,
             )
             .unwrap();
         ledger
-            .withdraw(receiver.id, money(5_000), TransactionChannel::MobileApp)
+            .withdraw(
+                receiver.id,
+                money(5_000),
+                TransactionChannel::MobileApp,
+                None,
+            )
             .unwrap();
 
         // Test all accounts
@@ -1327,5 +1431,75 @@ mod tests {
                 .sum();
             assert_eq!(cached, computed, "Balance mismatch for {:?}", account_id);
         }
+    }
+
+    #[test]
+    fn duplicate_idempotency_key_rejected() {
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+        let key = Some("unique-key-123".to_string());
+        ledger
+            .transfer(
+                sender.id,
+                receiver.id,
+                money(1_000),
+                TransactionChannel::MobileApp,
+                key.clone(),
+            )
+            .unwrap();
+        let result = ledger.transfer(
+            sender.id,
+            receiver.id,
+            money(1_000),
+            TransactionChannel::MobileApp,
+            key,
+        );
+        assert!(matches!(result, Err(LedgerError::DuplicateTransaction)));
+    }
+
+    #[test]
+    fn different_idempotency_keys_allowed() {
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+        ledger
+            .transfer(
+                sender.id,
+                receiver.id,
+                money(1_000),
+                TransactionChannel::MobileApp,
+                Some("key-1".to_string()),
+            )
+            .unwrap();
+        let result = ledger.transfer(
+            sender.id,
+            receiver.id,
+            money(1_000),
+            TransactionChannel::MobileApp,
+            Some("key-2".to_string()),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn none_idempotency_key_allows_duplicates() {
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+        ledger
+            .transfer(
+                sender.id,
+                receiver.id,
+                money(1_000),
+                TransactionChannel::MobileApp,
+                None,
+            )
+            .unwrap();
+        let result = ledger.transfer(
+            sender.id,
+            receiver.id,
+            money(1_000),
+            TransactionChannel::MobileApp,
+            None,
+        );
+        assert!(result.is_ok());
     }
 }
