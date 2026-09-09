@@ -1,6 +1,6 @@
 # hello-world
 
-A Rust learning project. **Stdlib only — no dependencies.**
+A Rust learning project.
 
 ## Layout
 
@@ -45,10 +45,19 @@ cargo test --all-targets
 ## Details
 
 - The ledger is **event-sourced**: a `Ledger` holds transactions, each with
-  `entries` (account + signed `Money` in integer cents). Balances are derived by
-  summing entries, never stored.
-- **One ledger per currency** — `Ledger::new(currency, fee_account)`. The ledger
-  also owns its `FeeSchedule` (a per-bank rate card) and the fee account where
-  collected fees land.
+  `entries` (account + signed `Money` in integer cents). Balances are cached
+  in a `HashMap` for O(1) lookups, updated on each transaction.
+- **Double-entry bookkeeping** — every transaction entry sums to zero.
+  `Ledger::new(currency, fee_account, external_account)` takes an external
+  vault account that absorbs the offsetting entries for deposits and withdrawals.
+- **Reversibility** — only transfers can be reversed via `reverse()`.
+  Deposits and withdrawals are final. Double-reversal is prevented.
+- **Timestamps** — each transaction has a `SystemTime` timestamp, displayed
+  as `YYYY-MM-DD HH:MM:SS UTC` via chrono.
+- **Idempotency keys** — `deposit`, `transfer`, `withdraw`, `reverse` accept
+  an optional idempotency key. Duplicate keys are rejected.
+- **One ledger per currency** — all accounts share the ledger's currency.
+  The ledger owns its `FeeSchedule` (per-bank rate card), fee account,
+  and external vault account.
 - Free/zero fees produce no ledger entry.
 - CI: `.github/workflows/ci.yml` (fmt → clippy → test on `ubuntu-latest`).
