@@ -13,7 +13,7 @@ fn main() {
     };
 
     let bank_fee_account = AccountId(999);
-    let mut ledger = Ledger::new(Currency::Kes);
+    let mut ledger = Ledger::new(Currency::Kes, bank_fee_account);
     ledger.add_account(alice.clone()).unwrap();
     ledger.add_account(brian.clone()).unwrap();
 
@@ -33,13 +33,7 @@ fn main() {
         currency: Currency::Kes,
     };
     ledger
-        .transfer(
-            alice.id,
-            brian.id,
-            transfer_amount,
-            TransactionChannel::Web,
-            bank_fee_account,
-        )
+        .transfer(alice.id, brian.id, transfer_amount, TransactionChannel::Web)
         .unwrap();
 
     println!("Alice: {}", ledger.balance_for(alice.id));

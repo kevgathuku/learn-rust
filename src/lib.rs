@@ -136,15 +136,17 @@ struct LedgerEntry {
 #[derive(Debug)]
 pub struct Ledger {
     currency: Currency,
+    fee_account: AccountId,
     accounts: HashMap<AccountId, Account>,
     transactions: Vec<Transaction>,
     fee_schedule: FeeSchedule,
 }
 
 impl Ledger {
-    pub fn new(currency: Currency) -> Self {
+    pub fn new(currency: Currency, fee_account: AccountId) -> Self {
         Self {
             currency,
+            fee_account,
             accounts: HashMap::new(),
             transactions: Vec::new(),
             fee_schedule: FeeSchedule::default(),
@@ -231,7 +233,6 @@ impl Ledger {
         receiver: AccountId,
         amount: Money,
         channel: TransactionChannel,
-        fee_account: AccountId,
     ) -> Result<(), String> {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
 
@@ -258,7 +259,7 @@ impl Ledger {
         // Record fees if applicable
         if fee.amount_cents > 0 {
             entries.push(LedgerEntry {
-                account: fee_account,
+                account: self.fee_account,
                 amount: fee,
             });
         }
@@ -282,7 +283,6 @@ impl Ledger {
         account_id: AccountId,
         amount: Money,
         channel: TransactionChannel,
-        fee_account: AccountId,
     ) -> Result<(), String> {
         self.account(account_id)?;
 
@@ -314,7 +314,7 @@ impl Ledger {
         // Record fees if applicable
         if fee.amount_cents > 0 {
             entries.push(LedgerEntry {
-                account: fee_account,
+                account: self.fee_account,
                 amount: fee,
             });
         }
@@ -378,7 +378,6 @@ mod tests {
             receiver,
             money(amount_cents),
             TransactionChannel::MobileApp,
-            BANK_FEE_ACCOUNT,
         )
     }
 
@@ -391,13 +390,12 @@ mod tests {
             account_id,
             money(amount_cents),
             TransactionChannel::MobileApp,
-            BANK_FEE_ACCOUNT,
         )
     }
 
     impl Ledger {
         fn with_accounts(first: (&str, i64), second: (&str, i64)) -> (Self, Account, Account) {
-            let mut ledger = Self::new(CURRENCY);
+            let mut ledger = Self::new(CURRENCY, BANK_FEE_ACCOUNT);
             let first_account = account(&mut ledger, first.0, first.1);
             let second_account = account(&mut ledger, second.0, second.1);
             (ledger, first_account, second_account)
@@ -406,7 +404,7 @@ mod tests {
 
     #[test]
     fn rejects_same_sender_and_receiver() {
-        let mut ledger = Ledger::new(CURRENCY);
+        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
         let sender = account(&mut ledger, "Alice", 1_000);
 
         assert!(
@@ -537,7 +535,6 @@ mod tests {
                 receiver.id,
                 money(10_000),
                 TransactionChannel::MobileApp,
-                BANK_FEE_ACCOUNT,
             )
             .unwrap();
 
@@ -561,7 +558,6 @@ mod tests {
                 receiver.id,
                 money(10_000),
                 TransactionChannel::Branch,
-                BANK_FEE_ACCOUNT,
             )
             .unwrap();
 
@@ -578,7 +574,7 @@ mod tests {
 
     #[test]
     fn withdraw_reduces_balance() {
-        let mut ledger = Ledger::new(CURRENCY);
+        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 40_000).unwrap();
@@ -588,7 +584,7 @@ mod tests {
 
     #[test]
     fn withdraw_fails_for_zero_amount() {
-        let mut ledger = Ledger::new(CURRENCY);
+        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 0).is_err());
@@ -597,7 +593,7 @@ mod tests {
 
     #[test]
     fn withdraw_fails_for_insufficient_funds() {
-        let mut ledger = Ledger::new(CURRENCY);
+        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         assert!(withdraw(&mut ledger, alice.id, 900_000).is_err());
@@ -606,7 +602,7 @@ mod tests {
 
     #[test]
     fn withdraw_exact_balance() {
-        let mut ledger = Ledger::new(CURRENCY);
+        let mut ledger = Ledger::new(CURRENCY, BANK_FEE_ACCOUNT);
         let alice = account(&mut ledger, "Alice", 100_000);
 
         withdraw(&mut ledger, alice.id, 100_000).unwrap();
