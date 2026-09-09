@@ -183,6 +183,7 @@ pub struct Transaction {
     kind: TransactionKind,
     channel: TransactionChannel,
     entries: Vec<LedgerEntry>,
+    timestamp: std::time::SystemTime,
 }
 
 impl Transaction {
@@ -206,6 +207,10 @@ impl Transaction {
 
     fn entry_for(&self, account: AccountId) -> Option<&LedgerEntry> {
         self.entries.iter().find(|e| e.account == account)
+    }
+
+    pub fn timestamp(&self) -> std::time::SystemTime {
+        self.timestamp
     }
 }
 
@@ -285,7 +290,8 @@ impl Ledger {
         }
     }
 
-    fn record(&mut self, transaction: Transaction) {
+    fn record(&mut self, mut transaction: Transaction) {
+        transaction.timestamp = std::time::SystemTime::now();
         self.transactions.push(transaction);
     }
 
@@ -407,6 +413,7 @@ impl Ledger {
                     },
                 },
             ],
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
         };
 
         self.record(transaction);
@@ -476,6 +483,7 @@ impl Ledger {
             },
             channel,
             entries,
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
         };
 
         self.record(transaction);
@@ -529,6 +537,7 @@ impl Ledger {
             },
             channel,
             entries,
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
         };
 
         self.record(transaction);
@@ -592,6 +601,7 @@ impl Ledger {
             },
             channel,
             entries: reversed_entries,
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
         };
         self.record(transaction);
         Ok(())
@@ -1245,5 +1255,16 @@ mod tests {
         let mut ledger = Ledger::new(CURRENCY, bank_fee_account(), external_account());
         let result = ledger.reverse(TransactionId(999), "Ghost", TransactionChannel::MobileApp);
         assert!(matches!(result, Err(LedgerError::TransactionNotFound(_))));
+    }
+
+    #[test]
+    fn transaction_has_timestamp() {
+        let (mut ledger, sender, receiver) =
+            Ledger::with_accounts(("Alice", 100_000), ("Brian", 100_000));
+        let before = std::time::SystemTime::now();
+        transfer(&mut ledger, sender.id, receiver.id, 1_000).unwrap();
+        let after = std::time::SystemTime::now();
+        let tx = ledger.transactions.last().unwrap();
+        assert!(tx.timestamp() >= before && tx.timestamp() <= after);
     }
 }
