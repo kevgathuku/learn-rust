@@ -226,42 +226,27 @@ struct LedgerEntry {
     amount: Money,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
+    #[error("invalid account {0:?}")]
     InvalidAccount(AccountId),
+    #[error("insufficient funds")]
     InsufficientFunds,
+    #[error("sender and receiver must differ")]
     SameSenderAndReceiver,
+    #[error("invalid amount")]
     InvalidAmount,
+    #[error("currency mismatch")]
     CurrencyMismatch,
+    #[error("transaction #{} not found", .0 .0)]
     TransactionNotFound(TransactionId),
+    #[error("transaction #{} already reversed", .0 .0)]
     TransactionAlreadyReversed(TransactionId),
+    #[error("transaction #{} cannot be reversed", .0 .0)]
     NonReversibleTransaction(TransactionId),
+    #[error("duplicate transaction (idempotency key already used)")]
     DuplicateTransaction,
 }
-
-impl std::fmt::Display for LedgerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidAccount(id) => write!(f, "invalid account {:?}", id),
-            Self::InsufficientFunds => write!(f, "insufficient funds"),
-            Self::SameSenderAndReceiver => write!(f, "sender and receiver must differ"),
-            Self::InvalidAmount => write!(f, "invalid amount"),
-            Self::CurrencyMismatch => write!(f, "currency mismatch"),
-            Self::TransactionNotFound(id) => write!(f, "transaction #{} not found", id.0),
-            Self::TransactionAlreadyReversed(id) => {
-                write!(f, "transaction #{} already reversed", id.0)
-            }
-            Self::NonReversibleTransaction(id) => {
-                write!(f, "transaction #{} cannot be reversed", id.0)
-            }
-            Self::DuplicateTransaction => {
-                write!(f, "duplicate transaction (idempotency key already used)")
-            }
-        }
-    }
-}
-
-impl std::error::Error for LedgerError {}
 
 fn format_system_time(time: std::time::SystemTime) -> String {
     let dt: DateTime<Utc> = time.into();
