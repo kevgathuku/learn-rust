@@ -165,7 +165,23 @@ struct FrankfurterRate {
 }
 
 pub fn fetch_frankfurter() -> Result<Vec<ExchangeRate>, RateError> {
-    let bases = [Currency::Usd, Currency::Eur, Currency::Kes];
+    let bases = [
+        Currency::Usd,
+        Currency::Eur,
+        Currency::Kes,
+        Currency::Gbp,
+        Currency::Jpy,
+        Currency::Chf,
+        Currency::Cad,
+        Currency::Aud,
+        Currency::Cny,
+        Currency::Inr,
+        Currency::Brl,
+        Currency::Tzs,
+        Currency::Ugx,
+        Currency::Rwf,
+        Currency::Zar,
+    ];
     let now = SystemTime::now();
     let mut rates = Vec::new();
 
