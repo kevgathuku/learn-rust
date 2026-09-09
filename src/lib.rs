@@ -86,16 +86,7 @@ impl FeeSchedule {
     }
 
     fn fee_for(&self, channel: TransactionChannel, currency: Currency) -> Money {
-        match self.policy_for(channel) {
-            FeePolicy::Free => Money {
-                amount_cents: 0,
-                currency,
-            },
-            FeePolicy::Flat { amount_cents } => Money {
-                amount_cents,
-                currency,
-            },
-        }
+        self.policy_for(channel).fee_for(currency)
     }
 }
 
