@@ -183,6 +183,20 @@ pub enum LedgerError {
     CurrencyMismatch,
 }
 
+impl std::fmt::Display for LedgerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidAccount(id) => write!(f, "invalid account {:?}", id),
+            Self::InsufficientFunds => write!(f, "insufficient funds"),
+            Self::SameSenderAndReceiver => write!(f, "sender and receiver must differ"),
+            Self::InvalidAmount => write!(f, "invalid amount"),
+            Self::CurrencyMismatch => write!(f, "currency mismatch"),
+        }
+    }
+}
+
+impl std::error::Error for LedgerError {}
+
 #[derive(Debug)]
 pub struct Ledger {
     currency: Currency,
