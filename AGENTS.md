@@ -42,8 +42,7 @@ no API key, $0).
 
 ## Project conventions
 
-Rust learning project — **stdlib only, no dependencies** (Cargo.toml is effectively
-empty). Write idiomatic stdlib Rust; do not reach for crates to avoid a few lines.
+Rust learning project. Write idiomatic Rust.
 
 ### Structure
 
@@ -63,10 +62,23 @@ empty). Write idiomatic stdlib Rust; do not reach for crates to avoid a few line
 - **The ledger owns its configuration**: the fee schedule and the fee account are
   fields on `Ledger`, never per-transaction parameters. `transfer`/`withdraw` read
   `self.*`.
-- **Fees are a rate card**: `FeePolicy` (`Free | Flat { … }`) holds the default per
-  channel; `FeeSchedule` is the per-bank card (a second bank = a second schedule).
-  A zero or free fee produces **no fee entry** — skip it, don't record a 0.
+- **Fee account is a full Account**: stored as `Account` (not just `AccountId`) so it's
+  always available for display in transaction formatting.
+- **Fees are a rate card**: `FeePolicy` supports `Free`, `Flat { amount_cents }`,
+  `Percentage { rate_bps }`, and `PercentageWithCap { rate_bps, cap_cents }`.
+  `FeeSchedule` maps channels to policies. `fee_for(amount: Money)` takes the
+  transaction amount to support percentage-based calculations.
 - **Money is integer cents** (`amount_cents: i64`), never floats.
+- **Error variants are unit types**: `InvalidAccount(AccountId)`, `InsufficientFunds`,
+  `SameSenderAndReceiver`, `InvalidAmount`, `CurrencyMismatch`. No redundant String
+  payloads.
+- **Account existence validated**: all methods (`deposit`, `transfer`, `withdraw`)
+  verify the account exists before proceeding, returning `InvalidAccount` if not.
+- **Display traits implemented**: `Currency`, `Money`, `TransactionKind`, `Transaction`
+  all have Display impls. `Ledger::format_transaction()` resolves account names for
+  human-readable output.
+- **Transaction metadata via entries**: `sender()`/`receiver()` methods on `Transaction`
+  derive from entry signs, not from `TransactionKind` fields.
 
 ### Testing
 

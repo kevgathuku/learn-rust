@@ -47,21 +47,39 @@ pub struct Account {
 #[derive(Debug, Copy, Clone)]
 pub enum FeePolicy {
     Free,
-    // TODO: Add currency specific fees
     Flat { amount_cents: i64 },
+    Percentage { rate_bps: u64 },
+    PercentageWithCap { rate_bps: u64, cap_cents: i64 },
 }
 
 impl FeePolicy {
-    fn fee_for(self, currency: Currency) -> Money {
+    fn fee_for(self, amount: Money) -> Money {
         match self {
             FeePolicy::Free => Money {
                 amount_cents: 0,
-                currency,
+                currency: amount.currency,
             },
             FeePolicy::Flat { amount_cents } => Money {
                 amount_cents,
-                currency,
+                currency: amount.currency,
             },
+            FeePolicy::Percentage { rate_bps } => {
+                let fee = amount.amount_cents * rate_bps as i64 / 10_000;
+                Money {
+                    amount_cents: fee,
+                    currency: amount.currency,
+                }
+            }
+            FeePolicy::PercentageWithCap {
+                rate_bps,
+                cap_cents,
+            } => {
+                let fee = (amount.amount_cents * rate_bps as i64 / 10_000).min(cap_cents);
+                Money {
+                    amount_cents: fee,
+                    currency: amount.currency,
+                }
+            }
         }
     }
 }
@@ -103,8 +121,8 @@ impl FeeSchedule {
         }
     }
 
-    fn fee_for(&self, channel: TransactionChannel, currency: Currency) -> Money {
-        self.policy_for(channel).fee_for(currency)
+    fn fee_for(&self, channel: TransactionChannel, amount: Money) -> Money {
+        self.policy_for(channel).fee_for(amount)
     }
 }
 
@@ -354,7 +372,7 @@ impl Ledger {
     ) -> Result<(), LedgerError> {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
 
-        let fee = self.fee_schedule.fee_for(channel, self.currency);
+        let fee = self.fee_schedule.fee_for(channel, amount);
         let total_debit = amount.amount_cents + fee.amount_cents;
         if total_debit > self.balance_for(sender) {
             return Err(LedgerError::InsufficientFunds);
@@ -406,7 +424,7 @@ impl Ledger {
 
         self.validate_amount(amount)?;
 
-        let fee = self.fee_schedule.fee_for(channel, self.currency);
+        let fee = self.fee_schedule.fee_for(channel, amount);
         let total_debit = amount.amount_cents + fee.amount_cents;
         let balance = self.balance_for(account_id);
 
@@ -757,6 +775,123 @@ mod tests {
                 .map(|entry| entry.amount.amount_cents),
             Some(200)
         );
+    }
+
+    #[test]
+    fn percentage_fee_calculates_correctly() {
+        let fee_account = bank_fee_account();
+        let mut ledger = Ledger {
+            currency: CURRENCY,
+            fee_account: fee_account.clone(),
+            accounts: HashMap::new(),
+            transactions: Vec::new(),
+            fee_schedule: FeeSchedule {
+                mobile_app: FeePolicy::Percentage { rate_bps: 150 }, // 1.5%
+                web: FeePolicy::Free,
+                branch: FeePolicy::Free,
+                agent: FeePolicy::Free,
+            },
+        };
+        let alice = account(&mut ledger, "Alice", 100_000);
+        let bob = account(&mut ledger, "Bob", 100_000);
+
+        // 1.5% of 10_000 = 150
+        ledger
+            .transfer(
+                alice.id,
+                bob.id,
+                money(10_000),
+                TransactionChannel::MobileApp,
+            )
+            .unwrap();
+
+        let tx = ledger.transactions.last().unwrap();
+        let fee_entry = tx
+            .entries
+            .iter()
+            .find(|e| e.account == fee_account.id)
+            .unwrap();
+        assert_eq!(fee_entry.amount.amount_cents, 150);
+    }
+
+    #[test]
+    fn percentage_fee_with_cap() {
+        let fee_account = bank_fee_account();
+        let mut ledger = Ledger {
+            currency: CURRENCY,
+            fee_account: fee_account.clone(),
+            accounts: HashMap::new(),
+            transactions: Vec::new(),
+            fee_schedule: FeeSchedule {
+                mobile_app: FeePolicy::PercentageWithCap {
+                    rate_bps: 500,    // 5%
+                    cap_cents: 1_000, // max 10.00
+                },
+                web: FeePolicy::Free,
+                branch: FeePolicy::Free,
+                agent: FeePolicy::Free,
+            },
+        };
+        let alice = account(&mut ledger, "Alice", 1_000_000);
+        let bob = account(&mut ledger, "Bob", 1_000_000);
+
+        // 5% of 50_000 = 2_500, but capped at 1_000
+        ledger
+            .transfer(
+                alice.id,
+                bob.id,
+                money(50_000),
+                TransactionChannel::MobileApp,
+            )
+            .unwrap();
+
+        let tx = ledger.transactions.last().unwrap();
+        let fee_entry = tx
+            .entries
+            .iter()
+            .find(|e| e.account == fee_account.id)
+            .unwrap();
+        assert_eq!(fee_entry.amount.amount_cents, 1_000);
+    }
+
+    #[test]
+    fn percentage_fee_below_cap() {
+        let fee_account = bank_fee_account();
+        let mut ledger = Ledger {
+            currency: CURRENCY,
+            fee_account: fee_account.clone(),
+            accounts: HashMap::new(),
+            transactions: Vec::new(),
+            fee_schedule: FeeSchedule {
+                mobile_app: FeePolicy::PercentageWithCap {
+                    rate_bps: 500,    // 5%
+                    cap_cents: 5_000, // max 50.00
+                },
+                web: FeePolicy::Free,
+                branch: FeePolicy::Free,
+                agent: FeePolicy::Free,
+            },
+        };
+        let alice = account(&mut ledger, "Alice", 100_000);
+        let bob = account(&mut ledger, "Bob", 100_000);
+
+        // 5% of 10_000 = 500, below cap
+        ledger
+            .transfer(
+                alice.id,
+                bob.id,
+                money(10_000),
+                TransactionChannel::MobileApp,
+            )
+            .unwrap();
+
+        let tx = ledger.transactions.last().unwrap();
+        let fee_entry = tx
+            .entries
+            .iter()
+            .find(|e| e.account == fee_account.id)
+            .unwrap();
+        assert_eq!(fee_entry.amount.amount_cents, 500);
     }
 
     #[test]
