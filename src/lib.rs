@@ -346,9 +346,17 @@ impl Ledger {
                 original_transaction_id,
                 ..
             } => {
+                let money = tx.entries.first().map(|e| e.amount).unwrap_or(Money {
+                    amount_cents: 0,
+                    currency: self.currency,
+                });
+                let abs_money = Money {
+                    amount_cents: money.amount_cents.abs(),
+                    currency: money.currency,
+                };
                 format!(
-                    "#{} Reversal of #{} via {:?}",
-                    tx.id.0, original_transaction_id.0, tx.channel
+                    "#{} Reversal of #{} {} via {:?}",
+                    tx.id.0, original_transaction_id.0, abs_money, tx.channel
                 )
             }
         }
