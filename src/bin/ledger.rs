@@ -15,28 +15,21 @@ fn main() {
     };
 
     let bank_fee_account = AccountId(999);
-    let mut ledger = Ledger::default();
-    ledger.add_account(alice.clone());
-    ledger.add_account(brian.clone());
-
-    let schedule = FeeSchedule {
+    let mut ledger = Ledger::new(FeeSchedule {
         mobile_app: FeePolicy::Free,
         web: FeePolicy::Free,
         branch: FeePolicy::Flat { amount_cents: 200 },
         agent: FeePolicy::Flat { amount_cents: 300 },
-    };
+    });
+    ledger.add_account(alice.clone());
+    ledger.add_account(brian.clone());
 
     let deposit_amount = Money {
         amount_cents: 100_000,
         currency: Currency::Kes,
     };
     ledger
-        .deposit(
-            alice.id,
-            deposit_amount,
-            TransactionChannel::MobileApp,
-            schedule,
-        )
+        .deposit(alice.id, deposit_amount, TransactionChannel::MobileApp)
         .unwrap();
 
     println!(
@@ -59,7 +52,6 @@ fn main() {
             transfer_amount,
             TransactionChannel::Web,
             bank_fee_account,
-            schedule,
         )
         .unwrap();
 

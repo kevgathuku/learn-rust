@@ -69,13 +69,6 @@ impl TransactionChannel {
     }
 }
 
-#[derive(Debug)]
-enum TransactionKind {
-    Deposit { account: AccountId },
-    Withdrawal { account: AccountId },
-    Transfer { from: AccountId, to: AccountId },
-}
-
 #[derive(Debug, Copy, Clone)]
 pub struct FeeSchedule {
     pub mobile_app: FeePolicy,
@@ -108,6 +101,24 @@ impl FeeSchedule {
     }
 }
 
+impl Default for FeeSchedule {
+    fn default() -> Self {
+        FeeSchedule {
+            mobile_app: TransactionChannel::MobileApp.fee_policy(),
+            web: TransactionChannel::Web.fee_policy(),
+            branch: TransactionChannel::Branch.fee_policy(),
+            agent: TransactionChannel::Agent.fee_policy(),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum TransactionKind {
+    Deposit { account: AccountId },
+    Withdrawal { account: AccountId },
+    Transfer { from: AccountId, to: AccountId },
+}
+
 #[derive(Debug)]
 struct Transaction {
     id: TransactionId,
@@ -126,9 +137,18 @@ struct LedgerEntry {
 pub struct Ledger {
     accounts: HashMap<AccountId, Account>,
     transactions: Vec<Transaction>,
+    fee_schedule: FeeSchedule,
 }
 
 impl Ledger {
+    pub fn new(fee_schedule: FeeSchedule) -> Self {
+        Self {
+            accounts: HashMap::new(),
+            transactions: Vec::new(),
+            fee_schedule,
+        }
+    }
+
     pub fn add_account(&mut self, account: Account) {
         self.accounts.insert(account.id, account);
     }
@@ -157,12 +177,10 @@ impl Ledger {
         account: AccountId,
         amount: Money,
         channel: TransactionChannel,
-        fee_schedule: FeeSchedule,
     ) -> Result<(), String> {
         if amount.amount_cents <= 0 {
             return Err(String::from("Invalid amount: Must be greater than 0"));
         }
-        let fee_policy = fee_schedule.policy_for(channel);
         let transaction = Transaction {
             id: TransactionId(self.transactions.len() as u64 + 1),
             kind: TransactionKind::Deposit { account },
@@ -209,11 +227,13 @@ impl Ledger {
         amount: Money,
         channel: TransactionChannel,
         fee_account: AccountId,
-        fee_schedule: FeeSchedule,
     ) -> Result<(), String> {
         self.validate_transfer(sender, receiver, amount)?; // short-circuit on error
 
-        let fee = fee_schedule.policy_for(channel).fee_for(amount.currency);
+        let fee = self
+            .fee_schedule
+            .policy_for(channel)
+            .fee_for(amount.currency);
         let total_debit = amount.amount_cents + fee.amount_cents;
         if total_debit > self.balance_for(sender, amount.currency) {
             return Err(String::from("Insufficient funds"));
@@ -254,7 +274,6 @@ impl Ledger {
         account_id: AccountId,
         amount: Money,
         channel: TransactionChannel,
-        fee_schedule: FeeSchedule,
         fee_account: AccountId,
     ) -> Result<(), String> {
         let account = self.account(account_id)?;
@@ -267,7 +286,7 @@ impl Ledger {
             return Err("Withdrawal currency does not match account currency".into());
         }
 
-        let fee = fee_schedule.fee_for(channel, amount.currency);
+        let fee = self.fee_schedule.fee_for(channel, amount.currency);
         let total_debit = amount.amount_cents + fee.amount_cents;
         let balance = self.balance_for(account_id, amount.currency);
 
@@ -316,12 +335,6 @@ mod tests {
 
     const BANK_FEE_ACCOUNT: AccountId = AccountId(999);
     const CURRENCY: Currency = Currency::Kes;
-    const FREE_SCHEDULE: FeeSchedule = FeeSchedule {
-        mobile_app: FeePolicy::Free,
-        web: FeePolicy::Free,
-        branch: FeePolicy::Free,
-        agent: FeePolicy::Free,
-    };
 
     fn money(amount_cents: i64) -> Money {
         Money {
@@ -334,12 +347,7 @@ mod tests {
         let id = AccountId(NEXT_ACCOUNT_ID.fetch_add(1, Ordering::Relaxed));
 
         ledger
-            .deposit(
-                id,
-                money(balance_cents),
-                TransactionChannel::MobileApp,
-                FREE_SCHEDULE,
-            )
+            .deposit(id, money(balance_cents), TransactionChannel::MobileApp)
             .unwrap();
 
         let account = Account {
@@ -363,7 +371,6 @@ mod tests {
             money(amount_cents),
             TransactionChannel::MobileApp,
             BANK_FEE_ACCOUNT,
-            FREE_SCHEDULE,
         )
     }
 
@@ -376,7 +383,6 @@ mod tests {
             account_id,
             money(amount_cents),
             TransactionChannel::MobileApp,
-            FREE_SCHEDULE,
             BANK_FEE_ACCOUNT,
         )
     }
